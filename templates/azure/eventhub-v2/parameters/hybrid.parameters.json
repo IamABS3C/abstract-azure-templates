@@ -1,0 +1,37 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "2.0.0.0",
+  "metadata": {
+    "description": "Best hardened pattern that still feeds Abstract: private endpoints for internal consumers PLUS a scoped public IP allowlist for Abstract's egress CIDRs. Public access stays Enabled but the firewall default is Deny."
+  },
+  "parameters": {
+    "namespaceName": { "value": "abs-eh001" },
+    "sku": { "value": "Standard" },
+    "capacity": { "value": 2 },
+    "autoInflate": { "value": true },
+    "maxThroughputUnits": { "value": 10 },
+    "autoHubNaming": { "value": true },
+    "hubPrefix": { "value": "evh-abstract" },
+    "hubSources": { "value": [ "activity", "entra", "defender", "sentinel" ] },
+    "defaultPartitionCount": { "value": 4 },
+    "consumerGroupName": { "value": "abstract" },
+    "enableSas": { "value": true },
+    "sasRights": { "value": [ "Listen" ] },
+    "enableRbac": { "value": true },
+    "principalId": { "value": "<service-principal-OBJECT-id>" },
+    "createStorageAccount": { "value": true },
+    "blobContainerName": { "value": "abstract-checkpoints" },
+    "storageApplyIpRules": { "value": true },
+    "safeMode": { "value": false },
+    "disablePublicNetwork": { "value": false },
+    "allowedIpRanges": { "value": [ "<abstract-egress-cidr>" ] },
+    "allowAzureServices": { "value": true },
+    "enablePrivateEndpoint": { "value": true },
+    "createStoragePrivateEndpoint": { "value": true },
+    "subnetId": { "value": "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet>" },
+    "privateDnsZoneId": { "value": "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/privateDnsZones/privatelink.servicebus.windows.net" },
+    "storageBlobPrivateDnsZoneId": { "value": "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net" },
+    "enableDiagnostics": { "value": true },
+    "logAnalyticsWorkspaceId": { "value": "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.OperationalInsights/workspaces/<workspace>" }
+  }
+}

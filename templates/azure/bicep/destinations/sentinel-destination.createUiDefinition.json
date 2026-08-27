@@ -1,0 +1,196 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/0.1.2-preview/CreateUIDefinition.MultiVm.json#",
+  "handler": "Microsoft.Azure.CreateUIDef",
+  "version": "0.1.2-preview",
+  "parameters": {
+    "config": {
+      "isWizard": true,
+      "basics": {
+        "description": "![Abstract Security](https://cybersecurity-excellence-awards.com/wp-content/uploads/163661.png)\n\n# ABSTRACT SECURITY\n**The Security Data Pipeline Platform.** Send detection-ready data straight into Microsoft Sentinel — normalized, enriched, and cost-optimized.\n\n[abstract.security](https://abstract.security) · [Documentation](https://docs.abstractsecurity.app/docs/integrations/destination-integrations/azure-sentinel-destination/) · [Book a demo](https://abstract.security)\n\n---\n### Azure Sentinel — Destination Integration\nAbstract **writes to** Microsoft Sentinel via the Azure Monitor Logs Ingestion API. This deployment provisions the **full stack**: a Log Analytics workspace, **Microsoft Sentinel**, a Data Collection Endpoint, a custom `_CL` table, a Data Collection Rule, and the RBAC the Abstract service principal needs on the DCR.\n\n✓ One-click full ingestion stack  ✓ Least-privilege DCR roles  ✓ Outputs the exact modal fields\n\n⚠️ **Before you start:** create an Entra **app registration** (with a client secret) for Abstract and have its *service principal object ID* ready — ARM cannot create app registrations. The Client ID / Client Secret / Tenant ID are entered in Abstract, not here.\n\nWhen the deployment finishes, the **Outputs** tab gives you the **Data Collection Rule ID**, **Data Collection Endpoint URL**, and **Log Stream Name** for the Abstract modal.",
+        "resourceGroup": {
+          "constraints": {
+            "validations": []
+          }
+        }
+      }
+    },
+    "basics": [],
+    "steps": [
+      {
+        "name": "workspace",
+        "label": "Workspace & Sentinel",
+        "elements": [
+          {
+            "name": "mode",
+            "type": "Microsoft.Common.OptionsGroup",
+            "label": "Log Analytics workspace",
+            "defaultValue": "Create a new workspace",
+            "toolTip": "Create a fresh workspace (and enable Sentinel on it), or target an existing workspace in THIS resource group.",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                { "label": "Create a new workspace", "value": "Create" },
+                { "label": "Use an existing workspace (in this resource group)", "value": "Existing" }
+              ]
+            }
+          },
+          {
+            "name": "workspaceNameNew",
+            "type": "Microsoft.Common.TextBox",
+            "label": "New workspace name (leave empty to auto-generate)",
+            "defaultValue": "",
+            "toolTip": "4-63 chars, letters/numbers/hyphens. Empty = auto-generated (abstract-sentinel-<hash>).",
+            "constraints": {
+              "required": false,
+              "regex": "^$|^[A-Za-z0-9][A-Za-z0-9-]{2,61}[A-Za-z0-9]$",
+              "validationMessage": "4-63 chars, letters/numbers/hyphens, or empty to auto-generate."
+            },
+            "visible": "[equals(steps('workspace').mode, 'Create')]"
+          },
+          {
+            "name": "workspaceNameExisting",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Existing workspace name",
+            "defaultValue": "",
+            "toolTip": "The exact name of an existing Log Analytics workspace in this resource group.",
+            "constraints": {
+              "required": "[equals(steps('workspace').mode, 'Existing')]",
+              "regex": "^[A-Za-z0-9][A-Za-z0-9-]{2,61}[A-Za-z0-9]$",
+              "validationMessage": "Enter the exact existing workspace name (4-63 chars)."
+            },
+            "visible": "[equals(steps('workspace').mode, 'Existing')]"
+          },
+          {
+            "name": "workspaceRetentionDays",
+            "type": "Microsoft.Common.Slider",
+            "label": "Workspace retention (days)",
+            "subLabel": "days",
+            "defaultValue": 90,
+            "min": 7,
+            "max": 730,
+            "showStepMarkers": false,
+            "toolTip": "Applied when creating a new workspace.",
+            "visible": "[equals(steps('workspace').mode, 'Create')]"
+          },
+          {
+            "name": "enableSentinel",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Enable Microsoft Sentinel on the new workspace",
+            "defaultValue": true,
+            "visible": "[equals(steps('workspace').mode, 'Create')]"
+          },
+          {
+            "name": "existingSentinelInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Info",
+              "text": "Make sure Microsoft Sentinel is already enabled on the existing workspace. This template does not change onboarding state for existing workspaces."
+            },
+            "visible": "[equals(steps('workspace').mode, 'Existing')]"
+          },
+          {
+            "name": "existingWorkspaceLocation",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Existing workspace region",
+            "defaultValue": "",
+            "toolTip": "The Azure region of the existing workspace (e.g. eastus2). The DCE and DCR must be created in the SAME region as the workspace. Leave empty only if the workspace is in this deployment's region.",
+            "constraints": {
+              "required": false,
+              "regex": "^$|^[a-z][a-z0-9]{2,30}$",
+              "validationMessage": "Enter the workspace region as its short name (e.g. eastus, westeurope), or leave empty to use the deployment region."
+            },
+            "visible": "[equals(steps('workspace').mode, 'Existing')]"
+          }
+        ]
+      },
+      {
+        "name": "ingestion",
+        "label": "Ingestion (DCE / DCR / table)",
+        "elements": [
+          {
+            "name": "ingestionInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Info",
+              "text": "Creates a Data Collection Endpoint, a custom *_CL table, and a Data Collection Rule that routes Abstract's stream into the table. The DCR stream name becomes 'Custom-<table name>' — that exact value is your 'Log Stream Name' in Abstract. The default table schema is minimal (TimeGenerated, Message, AbstractEvent); to capture the full Abstract Common Schema, deploy via CLI with a tableColumns parameter built from Abstract's all_fields.json."
+            }
+          },
+          {
+            "name": "customTableName",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Custom log table name",
+            "defaultValue": "AbstractEventLogs_CL",
+            "toolTip": "Must end in _CL. The Abstract 'Log Stream Name' will be Custom-<this value>.",
+            "constraints": {
+              "required": true,
+              "regex": "^[A-Za-z][A-Za-z0-9_]{0,43}_CL$",
+              "validationMessage": "Letters, numbers and underscores; must start with a letter and end with _CL (e.g. AbstractEventLogs_CL)."
+            }
+          },
+          {
+            "name": "dataCollectionEndpointName",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Data Collection Endpoint name",
+            "defaultValue": "abstract-dce",
+            "constraints": {
+              "required": true,
+              "regex": "^[A-Za-z0-9][A-Za-z0-9-_.]{2,43}[A-Za-z0-9]$",
+              "validationMessage": "3-44 chars: letters, numbers, hyphens, underscores, periods."
+            }
+          },
+          {
+            "name": "dataCollectionRuleName",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Data Collection Rule name",
+            "defaultValue": "abstract-dcr",
+            "constraints": {
+              "required": true,
+              "regex": "^[A-Za-z0-9][A-Za-z0-9-_.]{2,63}[A-Za-z0-9]$",
+              "validationMessage": "3-64 chars: letters, numbers, hyphens, underscores, periods."
+            }
+          }
+        ]
+      },
+      {
+        "name": "auth",
+        "label": "Authentication & RBAC",
+        "elements": [
+          {
+            "name": "authInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Info",
+              "text": "Abstract authenticates to Azure Monitor with an Entra app registration. ARM cannot create app registrations, so create the app + client secret first. Paste the app's SERVICE PRINCIPAL object ID below to have this template grant it Monitoring Metrics Publisher + Monitoring Contributor on the DCR. The Client ID, Client Secret and Tenant ID go into the Abstract modal directly."
+            }
+          },
+          {
+            "name": "principalId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Service principal object ID (for DCR role assignments)",
+            "toolTip": "Object ID of the Enterprise Application (service principal) for the Abstract app registration — NOT the Application (client) ID. Leave empty to assign the roles yourself later.",
+            "placeholder": "00000000-0000-0000-0000-000000000000",
+            "defaultValue": "",
+            "constraints": {
+              "required": false,
+              "regex": "^$|^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$",
+              "validationMessage": "Must be a GUID (the service principal OBJECT id) or empty."
+            }
+          }
+        ]
+      }
+    ],
+    "outputs": {
+      "location": "[location()]",
+      "createWorkspace": "[equals(steps('workspace').mode, 'Create')]",
+      "workspaceName": "[if(equals(steps('workspace').mode, 'Create'), coalesce(steps('workspace').workspaceNameNew, ''), steps('workspace').workspaceNameExisting)]",
+      "workspaceRetentionDays": "[coalesce(steps('workspace').workspaceRetentionDays, 90)]",
+      "enableSentinel": "[if(equals(steps('workspace').mode, 'Create'), coalesce(steps('workspace').enableSentinel, true), false)]",
+      "existingWorkspaceLocation": "[if(equals(steps('workspace').mode, 'Existing'), coalesce(steps('workspace').existingWorkspaceLocation, ''), '')]",
+      "dataCollectionEndpointName": "[steps('ingestion').dataCollectionEndpointName]",
+      "dataCollectionRuleName": "[steps('ingestion').dataCollectionRuleName]",
+      "customTableName": "[steps('ingestion').customTableName]",
+      "principalId": "[coalesce(steps('auth').principalId, '')]",
+      "principalType": "ServicePrincipal"
+    }
+  }
+}

@@ -1,0 +1,635 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-08-01/managementGroupDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.44.1.10279",
+      "templateHash": "3816246464847716870"
+    }
+  },
+  "parameters": {
+    "assignmentLocation": {
+      "type": "string",
+      "defaultValue": "eastus",
+      "metadata": {
+        "description": "Region the policy assignments' managed identities are created in. Unrelated to where logs are collected - any region you operate in is fine."
+      }
+    },
+    "namePrefix": {
+      "type": "string",
+      "defaultValue": "abs",
+      "minLength": 2,
+      "maxLength": 6,
+      "metadata": {
+        "description": "Prefix for every policy assignment name created here. Capped at 6: management-group policy assignment names have a 24-character limit (verified in the Azure resource naming rules), and the longest name built here is <prefix>-r-<13-char hash> = 22."
+      }
+    },
+    "effect": {
+      "type": "string",
+      "defaultValue": "DeployIfNotExists",
+      "allowedValues": [
+        "DeployIfNotExists",
+        "AuditIfNotExists",
+        "Disabled"
+      ],
+      "metadata": {
+        "description": "Policy effect. Use AuditIfNotExists for a dry run that reports what WOULD be onboarded without changing anything, then switch to DeployIfNotExists."
+      }
+    },
+    "enforcementMode": {
+      "type": "string",
+      "defaultValue": "Default",
+      "allowedValues": [
+        "Default",
+        "DoNotEnforce"
+      ],
+      "metadata": {
+        "description": "Assignments are created but not enforced when DoNotEnforce - use it to preview compliance before letting the policy deploy anything."
+      }
+    },
+    "enableActivityLog": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Onboard every subscription's Activity Log to the Abstract Event Hub."
+      }
+    },
+    "activityLogAuthorizationRuleId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource ID of an Event Hubs namespace authorization rule with Send rights, used for the Activity Log stream. Use the abstractDiagnosticsAuthRuleId output of main.bicep. Format: /subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.EventHub/namespaces/{ns}/authorizationrules/{rule}"
+      }
+    },
+    "activityLogEventHubName": {
+      "type": "string",
+      "defaultValue": "abs-prod-activity",
+      "metadata": {
+        "description": "Event Hub that receives the Activity Log stream. It must already exist - Azure Policy never creates hubs."
+      }
+    },
+    "activityLogCategories": {
+      "type": "array",
+      "defaultValue": [
+        "Administrative",
+        "Security",
+        "ServiceHealth",
+        "Alert",
+        "Recommendation",
+        "Policy",
+        "Autoscale",
+        "ResourceHealth"
+      ],
+      "metadata": {
+        "description": "Activity Log categories to export. Default is all eight."
+      }
+    },
+    "enableResourceLogs": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Onboard resource logs (Key Vault, NSG, Front Door, AKS, Cosmos DB, ~140 resource types) to the Abstract Event Hub."
+      }
+    },
+    "categoryGroup": {
+      "type": "string",
+      "defaultValue": "allLogs",
+      "allowedValues": [
+        "allLogs",
+        "audit"
+      ],
+      "metadata": {
+        "description": "Which category group to collect. allLogs is everything the resource emits; audit is the control-plane/data-access subset. allLogs is the Abstract default - filtering happens in the pipeline, not at the source."
+      }
+    },
+    "regions": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "One entry per region that holds regional resources. Azure Monitor REQUIRES the\nEvent Hub to be in the same region as the monitored resource, so each region\nneeds its own namespace and its own assignment.\n  [ { location: 'eastus', authorizationRuleId: '/subscriptions/.../authorizationrules/abstract-diagnostics-send', eventHubName: 'abs-prod-resource' } ]\n"
+      }
+    },
+    "resourceTypeList": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Restrict the resource-log initiative to specific resource types. Empty = every supported type (recommended)."
+      }
+    },
+    "diagnosticSettingName": {
+      "type": "string",
+      "defaultValue": "abstract-logstream",
+      "metadata": {
+        "description": "Name given to the diagnostic settings the policy creates. Pick something recognisable so operators know not to delete it by hand."
+      }
+    },
+    "enableSqlAuditing": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Also enable Azure SQL server auditing to the Event Hub. SQL auditing is NOT a diagnostic setting, so the resource-log initiative does not cover it."
+      }
+    },
+    "enableDefenderExport": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Also export Defender for Cloud alerts, recommendations and secure-score data to the Event Hub. Another separate mechanism (continuous export), not a diagnostic setting."
+      }
+    },
+    "defenderExportResourceGroup": {
+      "type": "string",
+      "defaultValue": "rg-abstract-defender-export",
+      "metadata": {
+        "description": "Resource group the Defender continuous-export resource is created in, inside every in-scope subscription."
+      }
+    },
+    "defenderEventHubAuthorizationRuleId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "HUB-level Event Hubs authorization rule for the Defender export. Unlike the other policies here this one wants a rule scoped to the hub, not the namespace: /subscriptions/{sub}/resourceGroups/{rg}/providers/Microsoft.EventHub/namespaces/{ns}/eventhubs/{hub}/authorizationRules/{rule}. Set perHubSasRules=true in main.bicep to have one created."
+      }
+    },
+    "defenderExportedDataTypes": {
+      "type": "array",
+      "defaultValue": [
+        "Alerts"
+      ],
+      "metadata": {
+        "description": "Defender for Cloud data types to export."
+      }
+    },
+    "defenderAlertSeverities": {
+      "type": "array",
+      "defaultValue": [
+        "High",
+        "Medium",
+        "Low"
+      ],
+      "metadata": {
+        "description": "Alert severities exported from Defender for Cloud."
+      }
+    }
+  },
+  "variables": {
+    "builtIn": {
+      "resourceLogsAllLogs": "[tenantResourceId('Microsoft.Authorization/policySetDefinitions', '85175a36-2f12-419a-96b4-18d5b0096531')]",
+      "resourceLogsAudit": "[tenantResourceId('Microsoft.Authorization/policySetDefinitions', '1020d527-2764-4230-92cc-7035e4fcf8a7')]",
+      "sqlAuditingToEventHub": "[tenantResourceId('Microsoft.Authorization/policyDefinitions', '9a04cb4d-8b47-4533-8e8e-b7a3c7742a0c')]",
+      "defenderExportToEventHub": "[tenantResourceId('Microsoft.Authorization/policyDefinitions', 'cdfcce10-4578-4ecd-9703-530938e4abcb')]"
+    },
+    "roles": {
+      "monitoringContributor": "749f88d5-cbae-40b8-bcfc-e573ddc772fa",
+      "logAnalyticsContributor": "92aaf0da-9dab-42b6-94a3-d43ce8d16293",
+      "eventHubsDataOwner": "f526a384-b230-433a-b45c-95f59c4a2dec",
+      "sqlSecurityManager": "056cd41c-7e88-42e1-933e-88ba6a50c9c3",
+      "contributor": "b24988ac-6180-42a0-ab88-20f7382dd24c"
+    },
+    "resourceLogsInitiativeId": "[if(equals(parameters('categoryGroup'), 'allLogs'), variables('builtIn').resourceLogsAllLogs, variables('builtIn').resourceLogsAudit)]"
+  },
+  "resources": [
+    {
+      "condition": "[parameters('enableActivityLog')]",
+      "type": "Microsoft.Authorization/policyDefinitions",
+      "apiVersion": "2023-04-01",
+      "name": "[format('{0}-activitylog-to-eventhub', parameters('namePrefix'))]",
+      "properties": {
+        "displayName": "Abstract Security - stream Azure Activity logs to the Abstract Event Hub",
+        "description": "Deploys a subscription-scope diagnostic setting that streams the Azure Activity Log to an Abstract Security Event Hub. Microsoft ships no built-in for the Event Hub destination (only Log Analytics), so this definition fills the gap.",
+        "policyType": "Custom",
+        "mode": "All",
+        "metadata": {
+          "category": "Monitoring",
+          "version": "1.0.0",
+          "vendor": "Abstract Security"
+        },
+        "parameters": {
+          "effect": {
+            "type": "String",
+            "allowedValues": [
+              "DeployIfNotExists",
+              "AuditIfNotExists",
+              "Disabled"
+            ],
+            "defaultValue": "DeployIfNotExists",
+            "metadata": {
+              "displayName": "Effect",
+              "description": "Enable or disable the execution of the policy."
+            }
+          },
+          "eventHubAuthorizationRuleId": {
+            "type": "String",
+            "metadata": {
+              "displayName": "Event Hub Authorization Rule Id",
+              "description": "Namespace-level authorization rule with Send rights. If the namespace sits outside the assignment scope you must grant Azure Event Hubs Data Owner to the assignment identity manually.",
+              "strongType": "Microsoft.EventHub/Namespaces/AuthorizationRules",
+              "assignPermissions": true
+            }
+          },
+          "eventHubName": {
+            "type": "String",
+            "metadata": {
+              "displayName": "Event Hub Name",
+              "description": "The Event Hub that receives the Activity Log stream. It must already exist."
+            }
+          },
+          "logCategories": {
+            "type": "Array",
+            "defaultValue": [
+              "Administrative",
+              "Security",
+              "ServiceHealth",
+              "Alert",
+              "Recommendation",
+              "Policy",
+              "Autoscale",
+              "ResourceHealth"
+            ],
+            "metadata": {
+              "displayName": "Activity Log categories",
+              "description": "Activity Log categories to stream."
+            }
+          },
+          "diagnosticSettingName": {
+            "type": "String",
+            "defaultValue": "abstract-activity-logs",
+            "metadata": {
+              "displayName": "Diagnostic Setting Name",
+              "description": "Name of the subscription diagnostic setting. Max 5 settings per subscription."
+            }
+          }
+        },
+        "policyRule": {
+          "if": {
+            "field": "type",
+            "equals": "Microsoft.Resources/subscriptions"
+          },
+          "then": {
+            "effect": "[[parameters('effect')]",
+            "details": {
+              "type": "Microsoft.Insights/diagnosticSettings",
+              "deploymentScope": "Subscription",
+              "existenceScope": "Subscription",
+              "existenceCondition": {
+                "allOf": [
+                  {
+                    "field": "Microsoft.Insights/diagnosticSettings/eventHubAuthorizationRuleId",
+                    "equals": "[[parameters('eventHubAuthorizationRuleId')]"
+                  },
+                  {
+                    "field": "Microsoft.Insights/diagnosticSettings/eventHubName",
+                    "equals": "[[parameters('eventHubName')]"
+                  }
+                ]
+              },
+              "roleDefinitionIds": [
+                "[tenantResourceId('Microsoft.Authorization/roleDefinitions', variables('roles').monitoringContributor)]",
+                "[tenantResourceId('Microsoft.Authorization/roleDefinitions', variables('roles').eventHubsDataOwner)]"
+              ],
+              "deployment": {
+                "location": "[parameters('assignmentLocation')]",
+                "properties": {
+                  "mode": "incremental",
+                  "parameters": {
+                    "eventHubAuthorizationRuleId": {
+                      "value": "[[parameters('eventHubAuthorizationRuleId')]"
+                    },
+                    "eventHubName": {
+                      "value": "[[parameters('eventHubName')]"
+                    },
+                    "logCategories": {
+                      "value": "[[parameters('logCategories')]"
+                    },
+                    "diagnosticSettingName": {
+                      "value": "[[parameters('diagnosticSettingName')]"
+                    }
+                  },
+                  "template": {
+                    "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                      "eventHubAuthorizationRuleId": {
+                        "type": "string"
+                      },
+                      "eventHubName": {
+                        "type": "string"
+                      },
+                      "logCategories": {
+                        "type": "array"
+                      },
+                      "diagnosticSettingName": {
+                        "type": "string"
+                      }
+                    },
+                    "resources": [
+                      {
+                        "type": "Microsoft.Insights/diagnosticSettings",
+                        "apiVersion": "2021-05-01-preview",
+                        "name": "[[parameters('diagnosticSettingName')]",
+                        "location": "Global",
+                        "properties": {
+                          "[string('copy')]": [
+                            {
+                              "name": "logs",
+                              "count": "[[length(parameters('logCategories'))]",
+                              "input": {
+                                "category": "[[parameters('logCategories')[copyIndex('logs')]]",
+                                "enabled": true
+                              }
+                            }
+                          ],
+                          "eventHubAuthorizationRuleId": "[[parameters('eventHubAuthorizationRuleId')]",
+                          "eventHubName": "[[parameters('eventHubName')]"
+                        }
+                      }
+                    ],
+                    "outputs": {
+                      "policy": {
+                        "type": "string",
+                        "value": "[[concat('Activity Log of this subscription streams to Event Hub ', parameters('eventHubName'), ' via ', parameters('eventHubAuthorizationRuleId'))]"
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "condition": "[parameters('enableActivityLog')]",
+      "type": "Microsoft.Authorization/policyAssignments",
+      "apiVersion": "2024-04-01",
+      "name": "[format('{0}-activitylog', parameters('namePrefix'))]",
+      "location": "[parameters('assignmentLocation')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "displayName": "Abstract Security - Activity Log to Event Hub",
+        "description": "Streams every in-scope subscription's Activity Log to the Abstract Event Hub, including subscriptions added to this management group later.",
+        "policyDefinitionId": "[extensionResourceId(managementGroup().id, 'Microsoft.Authorization/policyDefinitions', format('{0}-activitylog-to-eventhub', parameters('namePrefix')))]",
+        "enforcementMode": "[parameters('enforcementMode')]",
+        "parameters": {
+          "effect": {
+            "value": "[parameters('effect')]"
+          },
+          "eventHubAuthorizationRuleId": {
+            "value": "[parameters('activityLogAuthorizationRuleId')]"
+          },
+          "eventHubName": {
+            "value": "[parameters('activityLogEventHubName')]"
+          },
+          "logCategories": {
+            "value": "[parameters('activityLogCategories')]"
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(managementGroup().id, 'Microsoft.Authorization/policyDefinitions', format('{0}-activitylog-to-eventhub', parameters('namePrefix')))]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableActivityLog')]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(managementGroup().id, format('{0}-activitylog', parameters('namePrefix')), variables('roles').monitoringContributor)]",
+      "properties": {
+        "principalId": "[reference(extensionResourceId(managementGroup().id, 'Microsoft.Authorization/policyAssignments', format('{0}-activitylog', parameters('namePrefix'))), '2024-04-01', 'full').identity.principalId]",
+        "roleDefinitionId": "[tenantResourceId('Microsoft.Authorization/roleDefinitions', variables('roles').monitoringContributor)]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[extensionResourceId(managementGroup().id, 'Microsoft.Authorization/policyAssignments', format('{0}-activitylog', parameters('namePrefix')))]"
+      ]
+    },
+    {
+      "copy": {
+        "name": "resourceLogAssignments",
+        "count": "[length(parameters('regions'))]"
+      },
+      "condition": "[parameters('enableResourceLogs')]",
+      "type": "Microsoft.Authorization/policyAssignments",
+      "apiVersion": "2024-04-01",
+      "name": "[format('{0}-r-{1}', parameters('namePrefix'), uniqueString(string(parameters('regions')[copyIndex()].location)))]",
+      "location": "[parameters('assignmentLocation')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "displayName": "[format('Abstract Security - resource logs ({0}) to Event Hub', parameters('regions')[copyIndex()].location)]",
+        "description": "[format('Deploys {0} diagnostic settings on every supported resource in {1} to the Abstract Event Hub in the same region. Azure Monitor requires the hub and the monitored resource to share a region.', parameters('categoryGroup'), parameters('regions')[copyIndex()].location)]",
+        "policyDefinitionId": "[variables('resourceLogsInitiativeId')]",
+        "enforcementMode": "[parameters('enforcementMode')]",
+        "parameters": "[union(createObject('effect', createObject('value', parameters('effect')), 'eventHubAuthorizationRuleId', createObject('value', parameters('regions')[copyIndex()].authorizationRuleId), 'eventHubName', createObject('value', parameters('regions')[copyIndex()].eventHubName), 'resourceLocation', createObject('value', parameters('regions')[copyIndex()].location), 'diagnosticSettingName', createObject('value', parameters('diagnosticSettingName'))), if(empty(parameters('resourceTypeList')), createObject(), createObject('resourceTypeList', createObject('value', parameters('resourceTypeList')))))]"
+      }
+    },
+    {
+      "copy": {
+        "name": "resourceLogMonitoringRole",
+        "count": "[length(parameters('regions'))]"
+      },
+      "condition": "[parameters('enableResourceLogs')]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(managementGroup().id, 'res', string(parameters('regions')[copyIndex()].location), variables('roles').monitoringContributor)]",
+      "properties": {
+        "principalId": "[reference(extensionResourceId(managementGroup().id, 'Microsoft.Authorization/policyAssignments', format('{0}-r-{1}', parameters('namePrefix'), uniqueString(string(parameters('regions')[copyIndex()].location)))), '2024-04-01', 'full').identity.principalId]",
+        "roleDefinitionId": "[tenantResourceId('Microsoft.Authorization/roleDefinitions', variables('roles').monitoringContributor)]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[extensionResourceId(managementGroup().id, 'Microsoft.Authorization/policyAssignments', format('{0}-r-{1}', parameters('namePrefix'), uniqueString(string(parameters('regions')[copyIndex()].location))))]"
+      ]
+    },
+    {
+      "copy": {
+        "name": "resourceLogLawRole",
+        "count": "[length(parameters('regions'))]"
+      },
+      "condition": "[parameters('enableResourceLogs')]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(managementGroup().id, 'res', string(parameters('regions')[copyIndex()].location), variables('roles').logAnalyticsContributor)]",
+      "properties": {
+        "principalId": "[reference(extensionResourceId(managementGroup().id, 'Microsoft.Authorization/policyAssignments', format('{0}-r-{1}', parameters('namePrefix'), uniqueString(string(parameters('regions')[copyIndex()].location)))), '2024-04-01', 'full').identity.principalId]",
+        "roleDefinitionId": "[tenantResourceId('Microsoft.Authorization/roleDefinitions', variables('roles').logAnalyticsContributor)]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[extensionResourceId(managementGroup().id, 'Microsoft.Authorization/policyAssignments', format('{0}-r-{1}', parameters('namePrefix'), uniqueString(string(parameters('regions')[copyIndex()].location))))]"
+      ]
+    },
+    {
+      "copy": {
+        "name": "sqlAuditAssignments",
+        "count": "[length(parameters('regions'))]"
+      },
+      "condition": "[parameters('enableSqlAuditing')]",
+      "type": "Microsoft.Authorization/policyAssignments",
+      "apiVersion": "2024-04-01",
+      "name": "[format('{0}-s-{1}', parameters('namePrefix'), uniqueString(string(parameters('regions')[copyIndex()].location)))]",
+      "location": "[parameters('assignmentLocation')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "displayName": "[format('Abstract Security - SQL auditing ({0}) to Event Hub', parameters('regions')[copyIndex()].location)]",
+        "description": "Azure SQL auditing is a separate feature from diagnostic settings, so the resource-log initiative does not cover it. This closes that gap.",
+        "policyDefinitionId": "[variables('builtIn').sqlAuditingToEventHub]",
+        "enforcementMode": "[parameters('enforcementMode')]",
+        "parameters": {
+          "effect": {
+            "value": "[parameters('effect')]"
+          },
+          "eventHubRuleId": {
+            "value": "[parameters('regions')[copyIndex()].authorizationRuleId]"
+          },
+          "eventHubName": {
+            "value": "[parameters('regions')[copyIndex()].eventHubName]"
+          },
+          "eventHubLocation": {
+            "value": "[parameters('regions')[copyIndex()].location]"
+          }
+        }
+      }
+    },
+    {
+      "copy": {
+        "name": "sqlAuditRole",
+        "count": "[length(parameters('regions'))]"
+      },
+      "condition": "[parameters('enableSqlAuditing')]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(managementGroup().id, 'sql', string(parameters('regions')[copyIndex()].location), variables('roles').sqlSecurityManager)]",
+      "properties": {
+        "principalId": "[reference(extensionResourceId(managementGroup().id, 'Microsoft.Authorization/policyAssignments', format('{0}-s-{1}', parameters('namePrefix'), uniqueString(string(parameters('regions')[copyIndex()].location)))), '2024-04-01', 'full').identity.principalId]",
+        "roleDefinitionId": "[tenantResourceId('Microsoft.Authorization/roleDefinitions', variables('roles').sqlSecurityManager)]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[extensionResourceId(managementGroup().id, 'Microsoft.Authorization/policyAssignments', format('{0}-s-{1}', parameters('namePrefix'), uniqueString(string(parameters('regions')[copyIndex()].location))))]"
+      ]
+    },
+    {
+      "copy": {
+        "name": "sqlAuditLawRole",
+        "count": "[length(parameters('regions'))]"
+      },
+      "condition": "[parameters('enableSqlAuditing')]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(managementGroup().id, 'sql', string(parameters('regions')[copyIndex()].location), variables('roles').logAnalyticsContributor)]",
+      "properties": {
+        "principalId": "[reference(extensionResourceId(managementGroup().id, 'Microsoft.Authorization/policyAssignments', format('{0}-s-{1}', parameters('namePrefix'), uniqueString(string(parameters('regions')[copyIndex()].location)))), '2024-04-01', 'full').identity.principalId]",
+        "roleDefinitionId": "[tenantResourceId('Microsoft.Authorization/roleDefinitions', variables('roles').logAnalyticsContributor)]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[extensionResourceId(managementGroup().id, 'Microsoft.Authorization/policyAssignments', format('{0}-s-{1}', parameters('namePrefix'), uniqueString(string(parameters('regions')[copyIndex()].location))))]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableDefenderExport')]",
+      "type": "Microsoft.Authorization/policyAssignments",
+      "apiVersion": "2024-04-01",
+      "name": "[format('{0}-defender', parameters('namePrefix'))]",
+      "location": "[parameters('assignmentLocation')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "displayName": "Abstract Security - Defender for Cloud export to Event Hub",
+        "description": "Continuous export of Defender for Cloud alerts to the Abstract Event Hub, on every in-scope subscription.",
+        "policyDefinitionId": "[variables('builtIn').defenderExportToEventHub]",
+        "enforcementMode": "[parameters('enforcementMode')]",
+        "parameters": {
+          "resourceGroupName": {
+            "value": "[parameters('defenderExportResourceGroup')]"
+          },
+          "resourceGroupLocation": {
+            "value": "[parameters('assignmentLocation')]"
+          },
+          "createResourceGroup": {
+            "value": true
+          },
+          "exportedDataTypes": {
+            "value": "[parameters('defenderExportedDataTypes')]"
+          },
+          "alertSeverities": {
+            "value": "[parameters('defenderAlertSeverities')]"
+          },
+          "eventHubDetails": {
+            "value": "[parameters('defenderEventHubAuthorizationRuleId')]"
+          }
+        }
+      }
+    },
+    {
+      "condition": "[parameters('enableDefenderExport')]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(managementGroup().id, format('{0}-defender', parameters('namePrefix')), variables('roles').contributor)]",
+      "properties": {
+        "principalId": "[reference(extensionResourceId(managementGroup().id, 'Microsoft.Authorization/policyAssignments', format('{0}-defender', parameters('namePrefix'))), '2024-04-01', 'full').identity.principalId]",
+        "roleDefinitionId": "[tenantResourceId('Microsoft.Authorization/roleDefinitions', variables('roles').contributor)]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[extensionResourceId(managementGroup().id, 'Microsoft.Authorization/policyAssignments', format('{0}-defender', parameters('namePrefix')))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "managementGroupId": {
+      "type": "string",
+      "value": "[managementGroup().id]"
+    },
+    "eventHubsDataOwnerRoleId": {
+      "type": "string",
+      "value": "[variables('roles').eventHubsDataOwner]"
+    },
+    "activityLogPrincipalId": {
+      "type": "string",
+      "metadata": {
+        "description": "Activity Log assignment identity. Grant it Azure Event Hubs Data Owner on the namespace."
+      },
+      "value": "[if(parameters('enableActivityLog'), reference(extensionResourceId(managementGroup().id, 'Microsoft.Authorization/policyAssignments', format('{0}-activitylog', parameters('namePrefix'))), '2024-04-01', 'full').identity.principalId, '')]"
+    },
+    "resourceLogPrincipalIds": {
+      "type": "array",
+      "metadata": {
+        "description": "Resource-log assignment identities, one per region, in the same order as the regions parameter."
+      },
+      "copy": {
+        "count": "[length(parameters('regions'))]",
+        "input": "[if(parameters('enableResourceLogs'), createObject('region', parameters('regions')[copyIndex()].location, 'assignment', format('{0}-r-{1}', parameters('namePrefix'), uniqueString(string(parameters('regions')[copyIndex()].location))), 'principalId', reference(extensionResourceId(managementGroup().id, 'Microsoft.Authorization/policyAssignments', format('{0}-r-{1}', parameters('namePrefix'), uniqueString(string(parameters('regions')[copyIndex()].location)))), '2024-04-01', 'full').identity.principalId), createObject('region', parameters('regions')[copyIndex()].location, 'assignment', '(not assigned)', 'principalId', ''))]"
+      }
+    },
+    "sqlAuditPrincipalIds": {
+      "type": "array",
+      "metadata": {
+        "description": "SQL-auditing assignment identities, one per region, in the same order as the regions parameter."
+      },
+      "copy": {
+        "count": "[length(parameters('regions'))]",
+        "input": "[if(parameters('enableSqlAuditing'), createObject('region', parameters('regions')[copyIndex()].location, 'assignment', format('{0}-s-{1}', parameters('namePrefix'), uniqueString(string(parameters('regions')[copyIndex()].location))), 'principalId', reference(extensionResourceId(managementGroup().id, 'Microsoft.Authorization/policyAssignments', format('{0}-s-{1}', parameters('namePrefix'), uniqueString(string(parameters('regions')[copyIndex()].location)))), '2024-04-01', 'full').identity.principalId), createObject('region', parameters('regions')[copyIndex()].location, 'assignment', '(not assigned)', 'principalId', ''))]"
+      }
+    },
+    "onboardingSummary": {
+      "type": "object",
+      "value": {
+        "activityLog": "[if(parameters('enableActivityLog'), format('assigned - every subscription in {0}, now and future', managementGroup().name), 'not assigned')]",
+        "resourceLogs": "[if(parameters('enableResourceLogs'), format('{0} assigned for {1} region(s)', parameters('categoryGroup'), length(parameters('regions'))), 'not assigned')]",
+        "sqlAuditing": "[if(parameters('enableSqlAuditing'), format('assigned for {0} region(s)', length(parameters('regions'))), 'not assigned')]",
+        "defenderForCloud": "[if(parameters('enableDefenderExport'), 'assigned', 'not assigned')]",
+        "nextStep": "Grant Azure Event Hubs Data Owner to the principals above on the Event Hubs namespace, then run a remediation task to backfill EXISTING resources.",
+        "notCoveredByPolicy": "Microsoft Entra ID, Defender XDR and Microsoft 365 are tenant-level streams - see templates/tenant/entra-diagnostics.bicep and the coverage matrix in docs/azure-log-streams.md"
+      }
+    }
+  }
+}

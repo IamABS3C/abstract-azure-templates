@@ -1,0 +1,1008 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.44.1.10279",
+      "templateHash": "11166192023286904375"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Region for the Logic App and Event Grid subscription."
+      }
+    },
+    "workflowName": {
+      "type": "string",
+      "defaultValue": "abstract-appreg-onboarder",
+      "metadata": {
+        "description": "Name of the Logic App workflow."
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Tags applied to every resource created here."
+      }
+    },
+    "managedIdentityResourceId": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource ID of a user-assigned managed identity holding Graph Application.ReadWrite.All + AppRoleAssignment.ReadWrite.All (admin-consented). Create and consent it with scripts/Deploy-AbstractAppReg.sh -a Bootstrap. Treat as tier-0."
+      }
+    },
+    "managedIdentityClientId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Client ID of that identity. Unused by the Logic App itself (it authenticates by resource ID) but recorded in outputs so the two paths stay interchangeable."
+      }
+    },
+    "keyVaultName": {
+      "type": "string",
+      "metadata": {
+        "description": "Central Key Vault that receives every generated client secret. Must already exist; grant the identity Key Vault Secrets Officer on it."
+      }
+    },
+    "keyVaultInThisSubscription": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Set false if the Key Vault lives in a different subscription - then supply keyVaultUri instead."
+      }
+    },
+    "keyVaultUri": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Full vault URI (https://<name>.vault.azure.net/) when the vault is in another subscription."
+      }
+    },
+    "appNamePattern": {
+      "type": "string",
+      "defaultValue": "Abstract-{sub}",
+      "metadata": {
+        "description": "App display-name pattern. {sub} is replaced with the subscription ID. Also the idempotency key."
+      }
+    },
+    "graphPermissions": {
+      "type": "array",
+      "defaultValue": [
+        "AuditLog.Read.All",
+        "SecurityAlert.Read.All",
+        "SecurityEvents.Read.All",
+        "SecurityIncident.Read.All",
+        "Directory.Read.All",
+        "IdentityRiskEvent.Read.All",
+        "IdentityRiskyUser.Read.All",
+        "IdentityRiskyServicePrincipal.Read.All",
+        "ThreatHunting.Read.All",
+        "User.Read.All",
+        "Group.Read.All",
+        "Device.Read.All"
+      ],
+      "metadata": {
+        "description": "Microsoft Graph APPLICATION permissions requested for each app.\n\nVERIFIED against the live Graph service principal on 2026-08-03 (707 application\nappRoles). \"Security.Read.All\" is deliberately ABSENT - it exists as neither an\napplication nor a delegated permission; coverage comes from SecurityEvents.Read.All\nplus SecurityAlert.Read.All and SecurityIncident.Read.All.\n"
+      }
+    },
+    "secretMonths": {
+      "type": "int",
+      "defaultValue": 12,
+      "minValue": 1,
+      "maxValue": 24,
+      "metadata": {
+        "description": "Client-secret lifetime in months."
+      }
+    },
+    "subscriptionRoleDefinitionIds": {
+      "type": "array",
+      "defaultValue": [
+        "acdd72a7-3385-48ef-bd42-f606fba81ae7",
+        "a638d3c7-ab3a-418d-83e6-5f17a39d4fde"
+      ],
+      "metadata": {
+        "description": "Azure RBAC roles granted to each service principal on ITS OWN subscription. This is the only real per-subscription boundary: Graph application permissions are inherently tenant-wide."
+      }
+    },
+    "managementGroupId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Management group whose subscription events are watched. Leave empty to watch the whole tenant root."
+      }
+    },
+    "tagName": {
+      "type": "string",
+      "defaultValue": "abstract-onboard",
+      "metadata": {
+        "description": "Only onboard subscriptions carrying this tag. STRONGLY recommended - without it every subscription that appears is onboarded. Empty means no gate."
+      }
+    },
+    "tagValue": {
+      "type": "string",
+      "defaultValue": "true",
+      "metadata": {
+        "description": "Required tag value when tagName is set."
+      }
+    },
+    "enableEventTrigger": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Create the Event Grid subscription for automatic triggering. Set false to deploy the workflow and drive it manually first - the safest way to start."
+      }
+    },
+    "failureWebhookUrl": {
+      "type": "securestring",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional webhook (Teams/Slack/ASTRO) that receives a message when an onboarding run fails or consent verification falls short."
+      }
+    }
+  },
+  "variables": {
+    "graphResource": "https://graph.microsoft.com",
+    "graphAppId": "00000003-0000-0000-c000-000000000000",
+    "effectiveVaultUri": "[if(parameters('keyVaultInThisSubscription'), format('https://{0}{1}/', parameters('keyVaultName'), environment().suffixes.keyvaultDns), parameters('keyVaultUri'))]",
+    "armResource": "[environment().resourceManager]",
+    "vaultAudience": "[format('https://{0}', replace(replace(environment().suffixes.keyvaultDns, '.vault', 'vault'), '..', '.'))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Logic/workflows",
+      "apiVersion": "2019-05-01",
+      "name": "[parameters('workflowName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', parameters('managedIdentityResourceId'))]": {}
+        }
+      },
+      "properties": {
+        "state": "Enabled",
+        "definition": {
+          "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "graphPermissions": {
+              "type": "Array",
+              "defaultValue": "[parameters('graphPermissions')]"
+            },
+            "appNamePattern": {
+              "type": "String",
+              "defaultValue": "[parameters('appNamePattern')]"
+            },
+            "vaultUri": {
+              "type": "String",
+              "defaultValue": "[variables('effectiveVaultUri')]"
+            },
+            "secretMonths": {
+              "type": "Int",
+              "defaultValue": "[parameters('secretMonths')]"
+            },
+            "rbacRoles": {
+              "type": "Array",
+              "defaultValue": "[parameters('subscriptionRoleDefinitionIds')]"
+            },
+            "tagName": {
+              "type": "String",
+              "defaultValue": "[parameters('tagName')]"
+            },
+            "tagValue": {
+              "type": "String",
+              "defaultValue": "[parameters('tagValue')]"
+            }
+          },
+          "triggers": {
+            "manual": {
+              "type": "Request",
+              "kind": "Http",
+              "inputs": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "subscriptionId": {
+                      "type": "string"
+                    },
+                    "data": {
+                      "type": "object"
+                    },
+                    "subject": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "actions": {
+            "Resolve_subscription": {
+              "type": "Compose",
+              "runAfter": {},
+              "inputs": "@if(not(empty(coalesce(triggerBody()?['subscriptionId'], ''))), triggerBody()?['subscriptionId'], if(not(empty(coalesce(triggerBody()?['subject'], ''))), last(split(triggerBody()?['subject'], '/')), ''))"
+            },
+            "Guard_subscription_present": {
+              "type": "If",
+              "runAfter": {
+                "Resolve_subscription": [
+                  "Succeeded"
+                ]
+              },
+              "expression": {
+                "and": [
+                  {
+                    "not": {
+                      "equals": [
+                        "@outputs('Resolve_subscription')",
+                        ""
+                      ]
+                    }
+                  }
+                ]
+              },
+              "actions": {
+                "Get_subscription": {
+                  "type": "Http",
+                  "inputs": {
+                    "method": "GET",
+                    "uri": "[format('{0}subscriptions/@{{outputs(''Resolve_subscription'')}}?api-version=2021-01-01', variables('armResource'))]",
+                    "authentication": {
+                      "type": "ManagedServiceIdentity",
+                      "identity": "[parameters('managedIdentityResourceId')]",
+                      "audience": "[variables('armResource')]"
+                    }
+                  }
+                },
+                "Get_subscription_tags": {
+                  "type": "Http",
+                  "runAfter": {
+                    "Get_subscription": [
+                      "Succeeded"
+                    ]
+                  },
+                  "inputs": {
+                    "method": "GET",
+                    "uri": "[format('{0}subscriptions/@{{outputs(''Resolve_subscription'')}}/providers/Microsoft.Resources/tags/default?api-version=2021-04-01', variables('armResource'))]",
+                    "authentication": {
+                      "type": "ManagedServiceIdentity",
+                      "identity": "[parameters('managedIdentityResourceId')]",
+                      "audience": "[variables('armResource')]"
+                    }
+                  }
+                },
+                "Check_tag": {
+                  "type": "If",
+                  "runAfter": {
+                    "Get_subscription_tags": [
+                      "Succeeded",
+                      "Failed"
+                    ]
+                  },
+                  "expression": {
+                    "or": [
+                      {
+                        "equals": [
+                          "@parameters('tagName')",
+                          ""
+                        ]
+                      },
+                      {
+                        "equals": [
+                          "@coalesce(body('Get_subscription_tags')?['properties']?['tags']?[parameters('tagName')], '')",
+                          "@parameters('tagValue')"
+                        ]
+                      }
+                    ]
+                  },
+                  "actions": {
+                    "Get_graph_sp": {
+                      "type": "Http",
+                      "inputs": {
+                        "method": "GET",
+                        "uri": "[format('{0}/v1.0/servicePrincipals(appId=''{1}'')?$select=id,appRoles', variables('graphResource'), variables('graphAppId'))]",
+                        "authentication": {
+                          "type": "ManagedServiceIdentity",
+                          "identity": "[parameters('managedIdentityResourceId')]",
+                          "audience": "[variables('graphResource')]"
+                        }
+                      }
+                    },
+                    "Map_permissions": {
+                      "type": "Query",
+                      "runAfter": {
+                        "Get_graph_sp": [
+                          "Succeeded"
+                        ]
+                      },
+                      "inputs": {
+                        "from": "@body('Get_graph_sp')?['appRoles']",
+                        "where": "@and(contains(parameters('graphPermissions'), item()?['value']), contains(item()?['allowedMemberTypes'], 'Application'))"
+                      }
+                    },
+                    "Build_resource_access": {
+                      "type": "Select",
+                      "runAfter": {
+                        "Map_permissions": [
+                          "Succeeded"
+                        ]
+                      },
+                      "inputs": {
+                        "from": "@body('Map_permissions')",
+                        "select": {
+                          "id": "@item()?['id']",
+                          "type": "Role"
+                        }
+                      }
+                    },
+                    "Guard_all_permissions_resolved": {
+                      "type": "If",
+                      "runAfter": {
+                        "Build_resource_access": [
+                          "Succeeded"
+                        ]
+                      },
+                      "expression": {
+                        "and": [
+                          {
+                            "equals": [
+                              "@length(body('Map_permissions'))",
+                              "@length(parameters('graphPermissions'))"
+                            ]
+                          }
+                        ]
+                      },
+                      "actions": {
+                        "Find_existing_app": {
+                          "type": "Http",
+                          "inputs": {
+                            "method": "GET",
+                            "uri": "[format('{0}/v1.0/applications?$filter=displayName eq ''@{{replace(parameters(''appNamePattern''), ''{{sub}}'', outputs(''Resolve_subscription''))}}''&$select=id,appId', variables('graphResource'))]",
+                            "authentication": {
+                              "type": "ManagedServiceIdentity",
+                              "identity": "[parameters('managedIdentityResourceId')]",
+                              "audience": "[variables('graphResource')]"
+                            }
+                          }
+                        },
+                        "Create_or_reuse_app": {
+                          "type": "If",
+                          "runAfter": {
+                            "Find_existing_app": [
+                              "Succeeded"
+                            ]
+                          },
+                          "expression": {
+                            "and": [
+                              {
+                                "equals": [
+                                  "@length(body('Find_existing_app')?['value'])",
+                                  0
+                                ]
+                              }
+                            ]
+                          },
+                          "actions": {
+                            "Create_app": {
+                              "type": "Http",
+                              "inputs": {
+                                "method": "POST",
+                                "uri": "[format('{0}/v1.0/applications', variables('graphResource'))]",
+                                "headers": {
+                                  "Content-Type": "application/json"
+                                },
+                                "body": {
+                                  "displayName": "@replace(parameters('appNamePattern'), '{sub}', outputs('Resolve_subscription'))",
+                                  "signInAudience": "AzureADMyOrg",
+                                  "requiredResourceAccess": [
+                                    {
+                                      "resourceAppId": "[variables('graphAppId')]",
+                                      "resourceAccess": "@body('Build_resource_access')"
+                                    }
+                                  ]
+                                },
+                                "authentication": {
+                                  "type": "ManagedServiceIdentity",
+                                  "identity": "[parameters('managedIdentityResourceId')]",
+                                  "audience": "[variables('graphResource')]"
+                                }
+                              }
+                            }
+                          },
+                          "else": {
+                            "actions": {
+                              "Patch_existing_app_permissions": {
+                                "type": "Http",
+                                "inputs": {
+                                  "method": "PATCH",
+                                  "uri": "[format('{0}/v1.0/applications/@{{first(body(''Find_existing_app'')?[''value''])?[''id'']}}', variables('graphResource'))]",
+                                  "headers": {
+                                    "Content-Type": "application/json"
+                                  },
+                                  "body": {
+                                    "requiredResourceAccess": [
+                                      {
+                                        "resourceAppId": "[variables('graphAppId')]",
+                                        "resourceAccess": "@body('Build_resource_access')"
+                                      }
+                                    ]
+                                  },
+                                  "authentication": {
+                                    "type": "ManagedServiceIdentity",
+                                    "identity": "[parameters('managedIdentityResourceId')]",
+                                    "audience": "[variables('graphResource')]"
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "App_identifiers": {
+                          "type": "Compose",
+                          "runAfter": {
+                            "Create_or_reuse_app": [
+                              "Succeeded"
+                            ]
+                          },
+                          "inputs": {
+                            "appId": "@if(equals(length(body('Find_existing_app')?['value']), 0), body('Create_app')?['appId'], first(body('Find_existing_app')?['value'])?['appId'])",
+                            "objectId": "@if(equals(length(body('Find_existing_app')?['value']), 0), body('Create_app')?['id'], first(body('Find_existing_app')?['value'])?['id'])"
+                          }
+                        },
+                        "Wait_for_replication": {
+                          "type": "Wait",
+                          "runAfter": {
+                            "App_identifiers": [
+                              "Succeeded"
+                            ]
+                          },
+                          "inputs": {
+                            "interval": {
+                              "count": 20,
+                              "unit": "Second"
+                            }
+                          }
+                        },
+                        "Find_sp": {
+                          "type": "Http",
+                          "runAfter": {
+                            "Wait_for_replication": [
+                              "Succeeded"
+                            ]
+                          },
+                          "inputs": {
+                            "method": "GET",
+                            "uri": "[format('{0}/v1.0/servicePrincipals?$filter=appId eq ''@{{outputs(''App_identifiers'')?[''appId'']}}''&$select=id', variables('graphResource'))]",
+                            "authentication": {
+                              "type": "ManagedServiceIdentity",
+                              "identity": "[parameters('managedIdentityResourceId')]",
+                              "audience": "[variables('graphResource')]"
+                            }
+                          }
+                        },
+                        "Create_sp_if_missing": {
+                          "type": "If",
+                          "runAfter": {
+                            "Find_sp": [
+                              "Succeeded"
+                            ]
+                          },
+                          "expression": {
+                            "and": [
+                              {
+                                "equals": [
+                                  "@length(body('Find_sp')?['value'])",
+                                  0
+                                ]
+                              }
+                            ]
+                          },
+                          "actions": {
+                            "Create_sp": {
+                              "type": "Http",
+                              "inputs": {
+                                "method": "POST",
+                                "uri": "[format('{0}/v1.0/servicePrincipals', variables('graphResource'))]",
+                                "headers": {
+                                  "Content-Type": "application/json"
+                                },
+                                "body": {
+                                  "appId": "@outputs('App_identifiers')?['appId']"
+                                },
+                                "authentication": {
+                                  "type": "ManagedServiceIdentity",
+                                  "identity": "[parameters('managedIdentityResourceId')]",
+                                  "audience": "[variables('graphResource')]"
+                                }
+                              }
+                            },
+                            "Wait_for_sp_replication": {
+                              "type": "Wait",
+                              "runAfter": {
+                                "Create_sp": [
+                                  "Succeeded"
+                                ]
+                              },
+                              "inputs": {
+                                "interval": {
+                                  "count": 25,
+                                  "unit": "Second"
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "Sp_object_id": {
+                          "type": "Compose",
+                          "runAfter": {
+                            "Create_sp_if_missing": [
+                              "Succeeded"
+                            ]
+                          },
+                          "inputs": "@if(equals(length(body('Find_sp')?['value']), 0), body('Create_sp')?['id'], first(body('Find_sp')?['value'])?['id'])"
+                        },
+                        "Grant_consent": {
+                          "type": "Foreach",
+                          "runAfter": {
+                            "Sp_object_id": [
+                              "Succeeded"
+                            ]
+                          },
+                          "foreach": "@body('Map_permissions')",
+                          "actions": {
+                            "Assign_app_role": {
+                              "type": "Http",
+                              "inputs": {
+                                "method": "POST",
+                                "uri": "[format('{0}/v1.0/servicePrincipals/@{{outputs(''Sp_object_id'')}}/appRoleAssignments', variables('graphResource'))]",
+                                "headers": {
+                                  "Content-Type": "application/json"
+                                },
+                                "body": {
+                                  "principalId": "@outputs('Sp_object_id')",
+                                  "resourceId": "@body('Get_graph_sp')?['id']",
+                                  "appRoleId": "@items('Grant_consent')?['id']"
+                                },
+                                "authentication": {
+                                  "type": "ManagedServiceIdentity",
+                                  "identity": "[parameters('managedIdentityResourceId')]",
+                                  "audience": "[variables('graphResource')]"
+                                }
+                              },
+                              "runtimeConfiguration": {
+                                "contentTransfer": {
+                                  "transferMode": "Chunked"
+                                }
+                              }
+                            }
+                          },
+                          "runtimeConfiguration": {
+                            "concurrency": {
+                              "repetitions": 1
+                            }
+                          }
+                        },
+                        "Wait_before_verify": {
+                          "type": "Wait",
+                          "runAfter": {
+                            "Grant_consent": [
+                              "Succeeded",
+                              "Failed"
+                            ]
+                          },
+                          "inputs": {
+                            "interval": {
+                              "count": 15,
+                              "unit": "Second"
+                            }
+                          }
+                        },
+                        "Read_back_assignments": {
+                          "type": "Http",
+                          "runAfter": {
+                            "Wait_before_verify": [
+                              "Succeeded"
+                            ]
+                          },
+                          "inputs": {
+                            "method": "GET",
+                            "uri": "[format('{0}/v1.0/servicePrincipals/@{{outputs(''Sp_object_id'')}}/appRoleAssignments', variables('graphResource'))]",
+                            "authentication": {
+                              "type": "ManagedServiceIdentity",
+                              "identity": "[parameters('managedIdentityResourceId')]",
+                              "audience": "[variables('graphResource')]"
+                            }
+                          }
+                        },
+                        "Select_granted_ids": {
+                          "type": "Select",
+                          "runAfter": {
+                            "Read_back_assignments": [
+                              "Succeeded"
+                            ]
+                          },
+                          "inputs": {
+                            "from": "@body('Read_back_assignments')?['value']",
+                            "select": "@item()?['appRoleId']"
+                          }
+                        },
+                        "Select_wanted_ids": {
+                          "type": "Select",
+                          "runAfter": {
+                            "Select_granted_ids": [
+                              "Succeeded"
+                            ]
+                          },
+                          "inputs": {
+                            "from": "@body('Map_permissions')",
+                            "select": "@item()?['id']"
+                          }
+                        },
+                        "Verified_count": {
+                          "type": "Compose",
+                          "runAfter": {
+                            "Select_wanted_ids": [
+                              "Succeeded"
+                            ]
+                          },
+                          "inputs": "@length(intersection(body('Select_granted_ids'), body('Select_wanted_ids')))"
+                        },
+                        "Consent_complete": {
+                          "type": "If",
+                          "runAfter": {
+                            "Verified_count": [
+                              "Succeeded"
+                            ]
+                          },
+                          "expression": {
+                            "and": [
+                              {
+                                "equals": [
+                                  "@outputs('Verified_count')",
+                                  "@length(parameters('graphPermissions'))"
+                                ]
+                              }
+                            ]
+                          },
+                          "actions": {
+                            "Check_existing_secret": {
+                              "type": "Http",
+                              "inputs": {
+                                "method": "GET",
+                                "uri": "@{parameters('vaultUri')}secrets/abstract-@{outputs('Resolve_subscription')}?api-version=7.4",
+                                "authentication": {
+                                  "type": "ManagedServiceIdentity",
+                                  "identity": "[parameters('managedIdentityResourceId')]",
+                                  "audience": "[variables('vaultAudience')]"
+                                }
+                              }
+                            },
+                            "Rotate_if_needed": {
+                              "type": "If",
+                              "runAfter": {
+                                "Check_existing_secret": [
+                                  "Succeeded",
+                                  "Failed"
+                                ]
+                              },
+                              "expression": {
+                                "or": [
+                                  {
+                                    "not": {
+                                      "equals": [
+                                        "@outputs('Check_existing_secret')?['statusCode']",
+                                        200
+                                      ]
+                                    }
+                                  },
+                                  {
+                                    "less": [
+                                      "@coalesce(body('Check_existing_secret')?['attributes']?['exp'], 0)",
+                                      "@div(sub(ticks(addDays(utcNow(), 30)), ticks('1970-01-01T00:00:00Z')), 10000000)"
+                                    ]
+                                  }
+                                ]
+                              },
+                              "actions": {
+                                "Add_password": {
+                                  "type": "Http",
+                                  "inputs": {
+                                    "method": "POST",
+                                    "uri": "[format('{0}/v1.0/applications/@{{outputs(''App_identifiers'')?[''objectId'']}}/addPassword', variables('graphResource'))]",
+                                    "headers": {
+                                      "Content-Type": "application/json"
+                                    },
+                                    "body": {
+                                      "passwordCredential": {
+                                        "displayName": "Abstract @{outputs('Resolve_subscription')}",
+                                        "endDateTime": "@addToTime(utcNow(), parameters('secretMonths'), 'Month')"
+                                      }
+                                    },
+                                    "authentication": {
+                                      "type": "ManagedServiceIdentity",
+                                      "identity": "[parameters('managedIdentityResourceId')]",
+                                      "audience": "[variables('graphResource')]"
+                                    }
+                                  }
+                                },
+                                "Store_secret": {
+                                  "type": "Http",
+                                  "runAfter": {
+                                    "Add_password": [
+                                      "Succeeded"
+                                    ]
+                                  },
+                                  "inputs": {
+                                    "method": "PUT",
+                                    "uri": "@{parameters('vaultUri')}secrets/abstract-@{outputs('Resolve_subscription')}?api-version=7.4",
+                                    "headers": {
+                                      "Content-Type": "application/json"
+                                    },
+                                    "body": {
+                                      "value": "@body('Add_password')?['secretText']",
+                                      "attributes": {
+                                        "exp": "@div(sub(ticks(addToTime(utcNow(), parameters('secretMonths'), 'Month')), ticks('1970-01-01T00:00:00Z')), 10000000)"
+                                      },
+                                      "tags": {
+                                        "subscriptionId": "@outputs('Resolve_subscription')",
+                                        "appId": "@outputs('App_identifiers')?['appId']",
+                                        "managedBy": "abstract-appreg-automation"
+                                      }
+                                    },
+                                    "authentication": {
+                                      "type": "ManagedServiceIdentity",
+                                      "identity": "[parameters('managedIdentityResourceId')]",
+                                      "audience": "[variables('vaultAudience')]"
+                                    }
+                                  },
+                                  "runtimeConfiguration": {
+                                    "secureData": {
+                                      "properties": [
+                                        "inputs",
+                                        "outputs"
+                                      ]
+                                    }
+                                  }
+                                }
+                              }
+                            },
+                            "Assign_rbac": {
+                              "type": "Foreach",
+                              "runAfter": {
+                                "Rotate_if_needed": [
+                                  "Succeeded"
+                                ]
+                              },
+                              "foreach": "@parameters('rbacRoles')",
+                              "actions": {
+                                "Create_role_assignment": {
+                                  "type": "Http",
+                                  "inputs": {
+                                    "method": "PUT",
+                                    "uri": "[format('{0}subscriptions/@{{outputs(''Resolve_subscription'')}}/providers/Microsoft.Authorization/roleAssignments/@{{guid(concat(outputs(''Resolve_subscription''), outputs(''Sp_object_id''), items(''Assign_rbac'')))}}?api-version=2022-04-01', variables('armResource'))]",
+                                    "headers": {
+                                      "Content-Type": "application/json"
+                                    },
+                                    "body": {
+                                      "properties": {
+                                        "roleDefinitionId": "/subscriptions/@{outputs('Resolve_subscription')}/providers/Microsoft.Authorization/roleDefinitions/@{items('Assign_rbac')}",
+                                        "principalId": "@outputs('Sp_object_id')",
+                                        "principalType": "ServicePrincipal"
+                                      }
+                                    },
+                                    "authentication": {
+                                      "type": "ManagedServiceIdentity",
+                                      "identity": "[parameters('managedIdentityResourceId')]",
+                                      "audience": "[variables('armResource')]"
+                                    }
+                                  }
+                                }
+                              },
+                              "runtimeConfiguration": {
+                                "concurrency": {
+                                  "repetitions": 1
+                                }
+                              }
+                            },
+                            "Success_response": {
+                              "type": "Response",
+                              "kind": "Http",
+                              "runAfter": {
+                                "Assign_rbac": [
+                                  "Succeeded"
+                                ]
+                              },
+                              "inputs": {
+                                "statusCode": 200,
+                                "body": {
+                                  "status": "onboarded",
+                                  "subscriptionId": "@outputs('Resolve_subscription')",
+                                  "appId": "@outputs('App_identifiers')?['appId']",
+                                  "servicePrincipalObjectId": "@outputs('Sp_object_id')",
+                                  "permissionsVerified": "@outputs('Verified_count')",
+                                  "secretLocation": "@{parameters('vaultUri')}secrets/abstract-@{outputs('Resolve_subscription')}"
+                                }
+                              }
+                            }
+                          },
+                          "else": {
+                            "actions": {
+                              "Consent_shortfall_response": {
+                                "type": "Response",
+                                "kind": "Http",
+                                "inputs": {
+                                  "statusCode": 500,
+                                  "body": {
+                                    "status": "consent-incomplete",
+                                    "subscriptionId": "@outputs('Resolve_subscription')",
+                                    "appId": "@outputs('App_identifiers')?['appId']",
+                                    "verified": "@outputs('Verified_count')",
+                                    "expected": "@length(parameters('graphPermissions'))",
+                                    "remediation": "The managed identity most likely lacks AppRoleAssignment.ReadWrite.All admin consent. No secret was created, so nothing is half-provisioned. Fix consent and re-trigger."
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "else": {
+                        "actions": {
+                          "Unresolved_permission_response": {
+                            "type": "Response",
+                            "kind": "Http",
+                            "inputs": {
+                              "statusCode": 400,
+                              "body": {
+                                "status": "unresolved-permissions",
+                                "requested": "@length(parameters('graphPermissions'))",
+                                "resolved": "@length(body('Map_permissions'))",
+                                "remediation": "One or more names in graphPermissions do not exist as Graph APPLICATION permissions. \"Security.Read.All\" is the classic case - it exists as neither an application nor a delegated permission. Nothing was created."
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "else": {
+                    "actions": {
+                      "Not_tagged_response": {
+                        "type": "Response",
+                        "kind": "Http",
+                        "inputs": {
+                          "statusCode": 200,
+                          "body": {
+                            "status": "skipped-not-tagged",
+                            "subscriptionId": "@outputs('Resolve_subscription')",
+                            "requiredTag": "@{parameters('tagName')}=@{parameters('tagValue')}",
+                            "tagsFound": "@coalesce(body('Get_subscription_tags')?['properties']?['tags'], json('{}'))",
+                            "hint": "Tag the subscription: az tag update --resource-id /subscriptions/<id> --operation Merge --tags @{parameters('tagName')}=@{parameters('tagValue')}. If tagsFound is empty but you know tags exist, the identity cannot read them - it needs at least Reader on the subscription."
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              },
+              "else": {
+                "actions": {
+                  "No_subscription_response": {
+                    "type": "Response",
+                    "kind": "Http",
+                    "inputs": {
+                      "statusCode": 400,
+                      "body": {
+                        "status": "no-subscription-id",
+                        "hint": "POST {\"subscriptionId\":\"<guid>\"} or wire an Event Grid subscription event."
+                      }
+                    }
+                  }
+                }
+              }
+            },
+            "Failure_response": {
+              "type": "Response",
+              "kind": "Http",
+              "runAfter": {
+                "Guard_subscription_present": [
+                  "Failed",
+                  "TimedOut",
+                  "Skipped"
+                ]
+              },
+              "inputs": {
+                "statusCode": 500,
+                "body": {
+                  "status": "failed",
+                  "subscriptionId": "@outputs('Resolve_subscription')",
+                  "failedActions": "@result('Guard_subscription_present')",
+                  "likelyCauses": [
+                    "Get_subscription Forbidden -> the managed identity has no RBAC on the target subscription. Run: Deploy-AbstractAppReg.sh -a Grant -s <sub-id>",
+                    "Graph 403 on applications/servicePrincipals -> the identity lacks Application.ReadWrite.All admin consent. Run: Deploy-AbstractAppReg.sh -a Bootstrap",
+                    "Key Vault 403 -> the identity lacks Key Vault Secrets Officer on the vault. Run: Deploy-AbstractAppReg.sh -a Grant -k <vault>"
+                  ],
+                  "runHistory": "Full request/response bodies are in the Logic App run history for this run."
+                }
+              }
+            }
+          },
+          "outputs": {}
+        }
+      }
+    },
+    {
+      "condition": "[not(empty(parameters('failureWebhookUrl')))]",
+      "type": "Microsoft.Insights/actionGroups",
+      "apiVersion": "2023-01-01",
+      "name": "[format('{0}-failures', parameters('workflowName'))]",
+      "location": "global",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "groupShortName": "absappreg",
+        "enabled": true,
+        "webhookReceivers": [
+          {
+            "name": "abstract-webhook",
+            "serviceUri": "[parameters('failureWebhookUrl')]",
+            "useCommonAlertSchema": true
+          }
+        ]
+      }
+    },
+    {
+      "condition": "[parameters('enableEventTrigger')]",
+      "type": "Microsoft.EventGrid/systemTopics",
+      "apiVersion": "2023-12-15-preview",
+      "name": "[format('{0}-topic', parameters('workflowName'))]",
+      "location": "global",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "source": "[if(empty(parameters('managementGroupId')), tenant().tenantId, tenantResourceId('Microsoft.Management/managementGroups', parameters('managementGroupId')))]",
+        "topicType": "Microsoft.Resources.Subscriptions"
+      }
+    }
+  ],
+  "outputs": {
+    "workflowName": {
+      "type": "string",
+      "value": "[parameters('workflowName')]"
+    },
+    "identityPrincipalId": {
+      "type": "string",
+      "metadata": {
+        "description": "Grant this identity Key Vault Secrets Officer on the vault, and Owner (or Contributor + User Access Administrator) on each target subscription."
+      },
+      "value": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', last(split(parameters('managedIdentityResourceId'), '/'))), '2023-01-31').principalId]"
+    },
+    "identityClientId": {
+      "type": "string",
+      "value": "[if(empty(parameters('managedIdentityClientId')), reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', last(split(parameters('managedIdentityResourceId'), '/'))), '2023-01-31').clientId, parameters('managedIdentityClientId'))]"
+    },
+    "triggerUrlHint": {
+      "type": "string",
+      "metadata": {
+        "description": "POST {\"subscriptionId\":\"<guid>\"} here to onboard one subscription - use this to test and to backfill existing subscriptions. Contains a SAS signature: treat as a secret."
+      },
+      "value": "[format('az rest --method POST --url \"$(az logic workflow show -g {0} -n {1} --query accessEndpoint -o tsv)\" --body ''{{\"subscriptionId\":\"<guid>\"}}'' -- or read the callback URL from the portal Overview blade.', resourceGroup().name, parameters('workflowName'))]"
+    },
+    "nextSteps": {
+      "type": "object",
+      "value": {
+        "step1": "[format('Bootstrap: scripts/Deploy-AbstractAppReg.sh -a Bootstrap -i {0}. Needs Global Administrator ONCE - consents Application.ReadWrite.All + AppRoleAssignment.ReadWrite.All.', parameters('managedIdentityResourceId'))]",
+        "step2": "[format('Grant the identity above Key Vault Secrets Officer on {0} and Owner on each target subscription.', parameters('keyVaultName'))]",
+        "step3": "Test with ONE subscription by POSTing {\"subscriptionId\":\"<guid>\"} to the trigger URL. Check the run history - a consent shortfall returns 500 with the exact count.",
+        "step4": "Backfill existing subscriptions with the same POST, then set enableEventTrigger=true so new subscriptions onboard themselves.",
+        "tagGate": "[if(empty(parameters('tagName')), 'NO TAG GATE - every subscription that raises an event is onboarded. Strongly consider setting tagName.', format('Gated on {0}={1}. Tag a subscription to opt it in; a tag write also raises the event, so tagging an existing subscription onboards it.', parameters('tagName'), parameters('tagValue')))]",
+        "eventTrigger": "[if(parameters('enableEventTrigger'), 'Event Grid system topic created. Wire its event subscription to the workflow callback URL.', 'Event trigger NOT created (recommended for the first deployment). Set enableEventTrigger=true once a manual run succeeds.')]",
+        "secretHandling": "Secrets go to Key Vault only. The Store_secret action has secureData set on inputs AND outputs so the value never lands in run history."
+      }
+    }
+  }
+}

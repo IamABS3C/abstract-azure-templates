@@ -1,0 +1,187 @@
+{
+ "title": "Azure logs \u2192 Event Hubs \u2192 Abstract",
+ "theme": "dark",
+ "pages": [
+  {
+   "name": "Event Hub source",
+   "width": 1500,
+   "height": 960,
+   "groups": [
+    {
+     "id": "az",
+     "label": "Customer Azure tenant",
+     "kind": "plain",
+     "x": 60,
+     "y": 70,
+     "w": 880,
+     "h": 790,
+     "color": "#2e9bf0"
+    },
+    {
+     "id": "ns",
+     "label": "Event Hubs namespace",
+     "kind": "plain",
+     "x": 470,
+     "y": 170,
+     "w": 400,
+     "h": 460,
+     "color": "#f5c61e"
+    },
+    {
+     "id": "abs",
+     "label": "Abstract",
+     "kind": "plain",
+     "x": 1030,
+     "y": 70,
+     "w": 390,
+     "h": 790,
+     "color": "#FF216B"
+    }
+   ],
+   "nodes": [
+    {
+     "id": "entra",
+     "label": "Entra ID",
+     "icon": "azure:active_directory",
+     "parent": "az",
+     "x": 70,
+     "y": 110,
+     "sublabel": "tenant-wide, set once"
+    },
+    {
+     "id": "act",
+     "label": "Activity Log",
+     "icon": "azure:monitor",
+     "parent": "az",
+     "x": 70,
+     "y": 270,
+     "sublabel": "per subscription"
+    },
+    {
+     "id": "res",
+     "label": "Resource logs",
+     "icon": "azure:policy",
+     "parent": "az",
+     "x": 70,
+     "y": 420,
+     "sublabel": "via MG policy"
+    },
+    {
+     "id": "nsg",
+     "label": "NSG flow logs",
+     "icon": "azure:virtual_network",
+     "parent": "az",
+     "x": 70,
+     "y": 650,
+     "sublabel": "CANNOT reach Event Hub"
+    },
+    {
+     "id": "hub",
+     "label": "Event hub",
+     "icon": "azure:event_hubs",
+     "parent": "ns",
+     "x": 130,
+     "y": 80,
+     "sublabel": "one per source"
+    },
+    {
+     "id": "cg",
+     "label": "Consumer group",
+     "icon": "azure:log_search",
+     "parent": "ns",
+     "x": 130,
+     "y": 250,
+     "sublabel": "dedicated to Abstract"
+    },
+    {
+     "id": "ckpt",
+     "label": "Checkpoint storage",
+     "icon": "azure:storage_blob",
+     "parent": "az",
+     "x": 300,
+     "y": 430,
+     "sublabel": "private blob container"
+    },
+    {
+     "id": "plat",
+     "label": "Abstract platform",
+     "icon": "azure:monitor",
+     "parent": "abs",
+     "x": 140,
+     "y": 300,
+     "sublabel": "normalised to ACS",
+     "fill": "#FF216B"
+    }
+   ],
+   "edges": [
+    {
+     "from": "entra",
+     "to": "hub",
+     "label": "diagnostic setting",
+     "tone": "brand",
+     "label_x": -0.5
+    },
+    {
+     "from": "act",
+     "to": "hub",
+     "tone": "muted"
+    },
+    {
+     "from": "res",
+     "to": "hub",
+     "tone": "muted"
+    },
+    {
+     "from": "nsg",
+     "to": "hub",
+     "label": "no Event Hub property",
+     "tone": "warn",
+     "dashed": true,
+     "label_x": 0.5,
+     "exit": [
+      1,
+      0.5
+     ],
+     "entry": [
+      0.5,
+      1
+     ]
+    },
+    {
+     "from": "hub",
+     "to": "cg",
+     "tone": "brand",
+     "exit": [
+      0.5,
+      1
+     ],
+     "entry": [
+      0.5,
+      0
+     ]
+    },
+    {
+     "from": "cg",
+     "to": "plat",
+     "label": "consume",
+     "tone": "brand"
+    },
+    {
+     "from": "ckpt",
+     "to": "plat",
+     "label": "offset only",
+     "tone": "muted",
+     "label_x": 0.4,
+     "exit": [
+      1,
+      0.5
+     ],
+     "entry": [
+      0,
+      0.75
+     ]
+    }
+   ]
+  }
+ ]
+}

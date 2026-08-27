@@ -1,0 +1,892 @@
+id: azure.event-hub.source
+title: Azure logs → Event Hubs → Abstract
+cloud: azure
+service: Azure Event Hubs (as the collection point for Azure Monitor diagnostic settings)
+direction: source
+transport: event-hub
+status: ga
+provenance: validated
+owner: Solutions Engineering
+last_reviewed: '2026-08-25'
+summary: 'The foundation of every Azure onboarding. Azure Monitor cannot send diagnostic data directly
+  to a third party, so the pattern is always the same: stand up an Event Hubs namespace, point diagnostic
+  settings at it, and let Abstract consume from a dedicated consumer group. Deploy this FIRST — the Activity
+  Log, Entra ID, Defender XDR and resource-log paths all consume its outputs. One namespace with one hub
+  per log source serves an entire Azure estate.'
+when_to_use: 'Any time Azure telemetry needs to reach Abstract: Activity Log, Entra ID sign-in and audit
+  logs, Defender XDR streaming, or resource logs from any Azure service that supports diagnostic settings.
+  This is the default and correct answer for Azure.'
+when_not_to_use: Microsoft Graph API and Microsoft 365 unified-audit collection do NOT use Event Hubs
+  — they are API-pull integrations authenticated by an Entra app registration, and need no hub at all.
+  Do not stand up Event Hubs infrastructure for those and then wonder why nothing arrives.
+scopes:
+- resource-group
+covers_future_accounts: false
+mechanism_note: The hub itself is a single resource-group deployment and has no notion of future subscriptions.
+  Estate-wide coverage comes from what POINTS AT the hub — see azure.policy.log-streams, which assigns
+  at management-group scope and onboards current and future subscriptions automatically.
+abstract_integration:
+  id: default.azure_eventhub.0_7_1
+  name: Azure EventHub
+  mode: PULL
+  verified_on: '2026-08-25'
+  config_fields:
+  - key: ingestion_mode
+    label: Ingestion mode (kafka | amqp)
+    mandatory: false
+    note: Added in 0.7.0 and it changes the infrastructure you need. `kafka` uses the Event Hubs Kafka
+      endpoint on port 9093 and commits offsets to Event Hubs itself, so NO checkpoint storage account
+      is required. `amqp` is the pure-Python consumer and DOES require a blob checkpoint store. `amqp`
+      remains the default for backward compatibility. Kafka mode needs Standard tier or above.
+  - key: num_consumers
+    label: Number of consumers (Kafka mode)
+    mandatory: false
+    note: One consumer per thread in the same group. Never set this above the partition count — the surplus
+      consumers idle.
+  - key: backfill_hours
+    label: Backfill hours (Kafka mode)
+    mandatory: false
+    note: On partitions with no committed offset, seeks to now-N hours. Ignored where an offset already
+      exists.
+  - key: max_batch_size
+    label: Max batch size
+    mandatory: false
+    note: Default raised 800 → 1000 in 0.7.0.
+alternatives_rejected:
+- option: Log Analytics workspace as the collection point, with Abstract querying it
+  why_not: Adds a full ingestion charge per GB before Abstract ever sees the data, and makes Abstract's
+    read a query against someone else's retention window rather than a stream. Event Hubs is the streaming
+    path Azure designed for exactly this.
+- option: Storage account archive, with Abstract reading blobs
+  why_not: Works, but batches on a schedule instead of streaming, so detection latency becomes minutes-to-hours.
+    Reserve it for backfill and cold archive, not the live feed.
+- option: One Event Hub for everything
+  why_not: Mixing Activity Log, Entra sign-ins and Defender XDR into a single hub means one noisy source's
+    retention pressure evicts another's data, and per-source consumer tuning becomes impossible. One hub
+    per source type; one namespace for the estate.
+- option: Basic tier namespace
+  why_not: Basic caps retention at 1 day, offers only the $Default consumer group, has no IP firewall,
+    no Auto-Inflate, and cannot serve Kafka ingestion mode. A single day of retention means a weekend
+    consumer outage is unrecoverable data loss. Standard is the floor.
+decision:
+- id: q-tier
+  question: Standard, Premium or Dedicated namespace?
+  why_it_matters: Sets your retention ceiling, whether Auto-Inflate exists, whether Kafka ingestion mode
+    is available, and the shape of the bill. Standard covers the overwhelming majority of estates. Premium
+    buys isolation and longer retention; Dedicated is for very large multi-tenant ingestion and is priced
+    accordingly.
+  ask_who: Cloud platform owner, with FinOps sign-off on Premium and above
+  options:
+  - value: Standard (default and correct for almost everyone)
+    leads_to: bicep
+    note: Auto-Inflate, IP rules, private endpoints, custom consumer groups, up to 7-day retention, Kafka
+      endpoint.
+  - value: Premium
+    leads_to: bicep
+    note: Processing Units are 1/2/4/6/8/10/12/16 (the template header's "1/2/4/8/16" is incomplete) and
+      Auto-Inflate does not apply. Ingress events and Capture are included in the PU price.
+  - value: Basic
+    leads_to: stop:Basic cannot meet the requirements — 1-day retention, $Default consumer group only,
+      no firewall. Lab use only.
+- id: q-auth
+  question: Will Abstract authenticate with a SAS connection string, or with an Entra service principal?
+  why_it_matters: Decides what the customer hands over and what happens when it leaks. A SAS string is
+    a bearer credential with no identity behind it; a service principal is revocable, auditable and rotatable
+    centrally. Many regulated customers will refuse the SAS path outright, and you want to know that before
+    you have deployed with enableSas=true.
+  ask_who: Security architect or whoever owns the Entra tenant
+  options:
+  - value: Service principal (Entra RBAC) — recommended
+    leads_to: bicep
+    note: Set enableRbac=true and supply principalId (the ENTERPRISE APPLICATION object ID, not the app/client
+      ID — this is the single most common mistake). Grants Azure Event Hubs Data Receiver on the namespace
+      and, for AMQP mode, Storage Blob Data Contributor on the checkpoint account.
+  - value: SAS connection string
+    leads_to: bicep
+    note: enableSas=true creates a purpose-made least-privilege rule named abstract-access rather than
+      handing over RootManageSharedAccessKey. Set perHubSasRules=true to narrow the blast radius to a
+      single hub. Keys are never emitted in template outputs.
+  - value: Both, during a migration
+    leads_to: bicep
+    note: Valid transitional state. Plan the date you turn enableSas off; otherwise it never happens.
+- id: q-ingestion-mode
+  question: Kafka or AMQP ingestion mode?
+  why_it_matters: This is the decision most people miss, and it changes what infrastructure you need.
+    Kafka mode commits offsets to Event Hubs, so the checkpoint storage account is not required at all.
+    AMQP mode needs a storage account and a private blob container. Deploying storage you will never use
+    is waste; NOT deploying storage you do need is a broken consumer.
+  ask_who: Whoever configures the Abstract integration — confirm before the Bicep runs
+  options:
+  - value: Kafka (Standard tier or above, higher throughput)
+    leads_to: bicep
+    note: Set createStorageAccount=false. Scale with num_consumers, capped at the partition count.
+  - value: AMQP (default, works on any tier)
+    leads_to: bicep
+    note: Leave createStorageAccount=true. The blob container is mandatory — the consumer cannot checkpoint
+      without it.
+- id: q-scope
+  question: One subscription, or the whole estate including subscriptions created later?
+  why_it_matters: This is the question customers actually care about and it has a real answer. A per-subscription
+    diagnostic setting covers exactly one subscription forever. A management-group policy assignment covers
+    every current subscription and every future one, and re-creates a diagnostic setting that someone
+    deletes.
+  ask_who: Azure platform/governance owner — needs rights at the management group, which is usually NOT
+    the subscription owner
+  options:
+  - value: One subscription (pilot or a single-subscription estate)
+    leads_to: azure.activity-log.subscription
+  - value: Whole estate, current and future
+    leads_to: azure.policy.log-streams
+  - value: Entra ID tenant-wide identity logs
+    leads_to: azure.entra.diagnostics
+    note: Tenant scope, deployed once. Separate from subscription telemetry.
+- id: q-network
+  question: Public endpoint, IP allowlist, or private endpoint?
+  why_it_matters: 'A private endpoint sounds like the secure default and will break your ingestion if
+    you apply it without thinking: Abstract is a SaaS consumer outside the VNet, and Azure''s own diagnostic-settings
+    delivery is a trusted-service producer. Locking the namespace down without the trusted-services bypass
+    silently stops the producers.'
+  ask_who: Network security team
+  options:
+  - value: Public with trusted services allowed (simplest, still TLS 1.2)
+    leads_to: bicep
+  - value: IP allowlist
+    leads_to: bicep
+    note: A non-empty allowedIpRanges flips the firewall default action to Deny. You must keep allowAzureServices=true
+      or diagnostic settings stop delivering. Note the storage firewall rejects /31 and /32 — list single
+      addresses bare.
+  - value: Private endpoint
+    leads_to: bicep
+    note: Standard/Premium only. Solves VNet-internal producer traffic; it does NOT give Abstract a private
+      path, so the consumer still needs a permitted route in.
+- id: q-audit
+  question: Does the customer need to PROVE what Abstract read?
+  why_it_matters: 'Event Hubs runtime audit logs — the only record of who connected, with which credential,
+    from which IP, and what they received — exist on PREMIUM and DEDICATED tiers only. They are N/A on
+    Basic and Standard. Event Hubs does not delete on read, so on Standard there is no other trace: the
+    customer cannot demonstrate what a third party consumed. In a regulated deal this surfaces during
+    a compliance review, which is the worst possible moment to discover it.'
+  ask_who: Compliance or the control owner — not the cloud team
+  options:
+  - value: No formal read-attribution requirement (most customers)
+    leads_to: bicep
+    note: Standard is fine. Say plainly in the onboarding pack that read-side attribution is unavailable.
+  - value: Yes — read attribution is a control requirement
+    leads_to: bicep
+    note: Premium or Dedicated. Price it in early; it is not a switch you flip later.
+- id: q-region
+  question: Which region — and does that depend on WHAT you are collecting?
+  why_it_matters: 'It depends entirely on whether the source is REGIONAL, and this is not a cost trade-off
+    — it is a hard platform rejection. Azure Monitor refuses a diagnostic setting whose regional source
+    and Event Hub disagree, with "Resources should be in the same region" (verified empirically 2026-08-03).
+    So for RESOURCE logs you need one namespace per region that holds regional resources. But the Activity
+    Log is subscription-scope and Entra is tenant-scope — neither is a regional resource — so a single
+    hub serves those from any region. Deciding "one central region" without splitting on that distinction
+    is the mistake: it works fine until the first resource log, then fails at remediation time, long after
+    the deployment reported success.'
+  ask_who: Cloud architect — and they need the real region inventory, not the intended one
+  options:
+  - value: Activity Log, Entra and Defender only — no regional resource logs
+    leads_to: bicep
+    note: One namespace, any region. None of these are regional resources, so the same-region rule does
+      not apply to them at all.
+  - value: Resource logs in one region
+    leads_to: bicep
+    note: Put the namespace in that region.
+  - value: Resource logs across several regions
+    leads_to: azure.policy.log-streams
+    note: One namespace AND one policy assignment PER REGION. Not a preference and not a cost decision
+      — Azure rejects the cross-region setting outright.
+  - value: A single central region for everything, accepting cross-region charges
+    leads_to: 'stop:This does not work for regional resource logs. Azure Monitor rejects the setting with
+      a BadRequest, and it fails at remediation time rather than at deployment. Split the decision: central
+      hub for Activity Log/Entra/Defender, per-region namespaces for resource logs.'
+prereqs:
+  identity:
+  - principal: deployer
+    role: Contributor
+    scope: the target resource group
+    why: Create the Event Hubs namespace, hubs, consumer groups and the checkpoint storage account.
+    least_privilege_alternative: Azure Event Hubs Data Owner plus Storage Account Contributor on the resource
+      group is narrower than Contributor if the RG already exists.
+  - principal: deployer
+    role: User Access Administrator or Owner
+    scope: the target resource group
+    why: ONLY when enableRbac=true. Creating role assignments is a separate right from creating resources,
+      and plain Contributor cannot do it. This is the most common mid-deployment failure — the namespace
+      is created, then the role assignment 403s.
+    least_privilege_alternative: Role Based Access Control Administrator, scoped to the resource group.
+  - principal: abstract
+    role: Azure Event Hubs Data Receiver
+    scope: the namespace (or a single hub, to narrow it further)
+    why: Abstract's service principal reads events. Receiver is sufficient — never grant Data Owner.
+  - principal: abstract
+    role: Storage Blob Data Contributor
+    scope: the checkpoint storage account
+    why: AMQP ingestion mode only. The consumer writes lease and checkpoint blobs. Not needed in Kafka
+      mode.
+  - principal: deployer
+    role: Security Administrator (Entra DIRECTORY role, not Azure RBAC)
+    scope: the Entra tenant
+    why: 'ONLY for the Entra ID diagnostic setting. This is the biggest scope surprise in the whole Azure
+      onboarding: a subscription Owner — even a management-group Owner — cannot create it, because it
+      is a directory role rather than an Azure role. You do NOT need Global Administrator. On licensing,
+      defer to the Entra node: audit and sign-in logs are available on Entra ID FREE. Only Provisioning
+      logs, Graph activity logs and the ID Protection categories require P1/P2 — an earlier version of
+      this line said sign-in logs needed P1, which is not documented anywhere.'
+    least_privilege_alternative: Attribute Log Administrator, for custom-security-attribute logs only.
+  - principal: deployer
+    role: Privileged Role Administrator or Global Administrator
+    scope: the Entra tenant
+    why: ONLY for the Graph / M365 app-registration path, which does not use Event Hubs at all. Microsoft
+      Graph APPLICATION permissions cannot be consented by Application Administrator or Cloud Application
+      Administrator. Note the Office 365 Management API roles (ActivityFeed.Read, ActivityFeed.ReadDlp)
+      are NOT Graph, so the M365-only path genuinely has a lower bar.
+  - principal: policy-identity
+    role: Monitoring Contributor, plus listKeys on the Event Hub authorization rule
+    scope: management group, plus the namespace's own resource group
+    why: The DeployIfNotExists remediation identity writes diagnostic settings AND must read the hub's
+      authorization rule key. The namespace usually sits OUTSIDE the management group being onboarded,
+      so the second grant is a separate step that is easy to miss.
+    least_privilege_alternative: A custom role limited to authorizationRules/read plus authorizationRules/listkeys/action.
+      Granting Azure Event Hubs Data Owner works but is Microsoft.EventHub/* — a remediation identity
+      that can delete the hub.
+  - principal: service-identity
+    role: Azure Event Hubs Data Sender
+    scope: the namespace or the diagnostics Send rule
+    why: 'Log producers — Azure Monitor diagnostic settings — must WRITE. The template creates a dedicated
+      Send-only SAS rule (abstract-diagnostics-send), deliberately separate from the Listen-only consumer
+      rule. CAVEAT, corroborated by two independent Microsoft sources: the docs state streaming to Event
+      Hubs requires Manage, Send AND Listen, plus ListKey on the authorization rule to create the setting.
+      A Send-only rule may therefore NOT be sufficient. Live-test before telling a customer this is least-privilege;
+      if Send-only fails, the honest statement is "the diagnostics rule needs Manage.".'
+  resources:
+  - An Azure subscription and a resource group to hold the namespace.
+  - A globally unique namespace name, 6–50 characters, starting with a letter.
+  - 'For AMQP mode: a storage account name that is globally unique, 3–24 lowercase alphanumeric characters.
+    The template auto-generates one if left empty.'
+  settings:
+  - Register the Microsoft.EventHub resource provider on the subscription if it has never been used there.
+  - Decide the ingestion mode before deploying — it determines whether createStorageAccount should be
+    true.
+  network:
+  - If the namespace firewall will be in Deny mode, allowAzureServices MUST stay true or Azure Monitor
+    cannot deliver.
+  - Private endpoints require Standard or Premium and a subnet with a NIC, plus the privatelink.servicebus.windows.net
+    Private DNS zone.
+  quotas_limits:
+  - 'Standard: 1–40 Throughput Units, up to 32 partitions per hub, 1–7 days retention.'
+  - 'Standard includes 84 GB of event storage PER THROUGHPUT UNIT. This is an INCLUDED ALLOWANCE, not
+    a cap: exceeding it does not truncate retention or drop data, it bills the overage. The failure mode
+    is a surprise invoice, NOT silent data loss. Retention days and TU count are still coupled for COST,
+    so size them together — but never tell a customer they will lose data at 84 GB.'
+  - 'Premium: capacity must be 1, 2, 4, 8 or 16 Processing Units; Auto-Inflate does not apply.'
+  - Zone redundancy is AUTOMATIC AND FREE on Standard and Premium — the absent zoneRedundant property
+    is NOT a gap. The real availability gap is the Standard_LRS checkpoint storage account, the least-available
+    component in an otherwise zone-resilient path.
+  - A COMPACTED event hub CANNOT be used — it requires a partition key, which Azure Monitor does not include.
+    This fails in a way that is very hard to diagnose.
+  - A single diagnostic setting can define at most ONE destination of each type. Two Log Analytics workspaces
+    means two settings — which then counts twice against the 5-setting limit.
+  - MAX 5 DIAGNOSTIC SETTINGS PER RESOURCE. A subscription already exporting to Sentinel, a storage archive
+    and two other vendors will fail to add another — and the error reads like a quota fault, not a design
+    constraint.
+  - 'Standard tier: 10 event hubs per namespace, 20 consumer groups per hub, and 12 authorization rules
+    per namespace. perHubSasRules across many hubs hits the rule cap.'
+  - Runtime audit logs are Premium/Dedicated ONLY — N/A on Basic and Standard.
+  - PARTITION COUNT CANNOT BE REDUCED after creation — and on Standard it cannot be increased either.
+    Choose at least 4; size it to your peak, not today's volume.
+  lead_time: Microsoft documents that after creating a diagnostic setting, data should start flowing "within
+    90 minutes" — NOT the few minutes people assume. Do not tear down a working configuration during a
+    customer call because nothing arrived in ten. Microsoft Graph activity logs can take up to 2 hours
+    in less common cases.
+console_walkthrough:
+- step: 1
+  action: Create the Event Hubs namespace
+  where: Azure portal → Event Hubs → Create
+  expected: Namespace shows Status "Active" after 2–3 minutes.
+  gotcha: Choose Standard, not Basic. The portal defaults can land you on Basic, and Basic cannot create
+    the custom consumer group Abstract needs — you will only discover this two steps later.
+  image:
+    path: assets/diagrams/azure-eventhub-source.png
+    alt: Azure tenant on the left with Entra ID, Activity Log and resource logs feeding an Event Hubs
+      namespace, a dedicated consumer group that Abstract consumes, checkpoint storage holding only offsets,
+      and NSG flow logs shown as unable to reach the hub
+    caption: Every Azure log path on one page. **NSG and VNet flow logs cannot reach an Event Hub at all**
+      — the flowLogs resource has a required storageId and no Event Hub property, so Azure's biggest-volume
+      source is structurally off this path.
+    source: drawio
+    license: vendor-icon-set
+    altered: false
+    captured: '2026-08-26'
+    tenant_safe: true
+- step: 2
+  action: Set pricing tier, throughput units and Auto-Inflate
+  where: Namespace → Scale
+  expected: Auto-Inflate enabled with a sensible maximum (20 TU is a reasonable ceiling).
+  gotcha: Auto-Inflate scales UP automatically but never scales back DOWN. Someone has to lower it manually
+    after a spike, or you pay the peak rate indefinitely.
+- step: 3
+  action: Create one Event Hub per log source
+  where: Namespace → Event Hubs → + Event Hub
+  expected: One hub per source, e.g. abs-prod-activity, abs-prod-entra, abs-prod-defender.
+  gotcha: Set partition count now — at least 4. It cannot be reduced later, and on Standard it cannot
+    be raised either. Retention 7 days on Standard gives you a weekend of slack if the consumer stops.
+- step: 4
+  action: Create a dedicated consumer group on each hub
+  where: Event Hub → Consumer groups → + Consumer group
+  expected: A consumer group named "abstract" alongside $Default.
+  gotcha: Never point Abstract at $Default. Two consumers sharing a group fight over partition leases
+    and each sees only part of the stream — which looks like intermittent data loss, not a configuration
+    error.
+- step: 5
+  action: Create the access policy Abstract will use
+  where: Namespace or Event Hub → Shared access policies → + Add
+  expected: A policy named abstract-access with Listen only.
+  gotcha: Do not hand over RootManageSharedAccessKey. It carries Manage, Send and Listen on every hub
+    in the namespace, and it cannot be scoped down after the fact.
+- step: 6
+  action: Create a separate Send-only policy for the log producers
+  where: Namespace → Shared access policies → + Add
+  expected: A policy named abstract-diagnostics-send with Send only.
+  gotcha: Diagnostic settings need Send. Keeping producer and consumer credentials separate means rotating
+    one never breaks the other.
+- step: 7
+  action: AMQP mode only — create the checkpoint storage account and a private blob container
+  where: Storage accounts → Create → Containers → + Container
+  expected: A container named abstract-checkpoints with access level Private.
+  gotcha: Skip this in Kafka mode; offsets commit to Event Hubs instead. If you are on AMQP and skip it,
+    the consumer starts, reads, and can never checkpoint — so it replays from the beginning on every restart.
+- step: 8
+  action: Configure the integration in Abstract
+  where: Abstract console → Integrations → Azure EventHub
+  expected: Configuration validates and events appear within 15 minutes.
+  gotcha: For service-principal auth, the field wants the Enterprise Application OBJECT ID, not the Application
+    (client) ID. Confusing the two produces an unhelpful auth error.
+artifacts:
+- kind: bicep
+  external_path: templates/azure/bicep/source/eventhub-source.bicep
+  provenance: validated
+  recommended: true
+  scope: resourceGroup
+  idempotent: true
+  destructive_risk: Re-running is safe for the namespace, hubs and consumer groups. Changing defaultPartitionCount
+    on an existing hub does NOT resize it — Azure ignores the change silently, which is worse than an
+    error because the template reports success.
+  validation:
+    command: python3 solutions/scripts/validate-templates.py
+    result: 'All 9 template(s) valid. 9 warning(s). — eventhub-source.bicep: resourceGroup / createUiDefinition
+      / ok'
+    run_on: '2026-08-25'
+    tool_version: Bicep CLI 0.44.1, Azure CLI 2.87.0
+  note: Version 2.0. Deploys the namespace, one hub per source (auto-named <prefix>-<env>-<source>), a
+    consumer group per hub, the checkpoint storage account and private container, both auth models, a
+    separate Send-only diagnostics rule, and the networking guardrails. Emits abstractDiagnosticsAuthRuleId
+    and eventHubNames, which every downstream Azure template consumes. Keys are never emitted in outputs.
+- kind: arm-json
+  external_path: templates/azure/bicep/source/eventhub-source.azuredeploy.json
+  provenance: validated
+  scope: resourceGroup
+  validation:
+    command: 'python3 solutions/scripts/validate-templates.py  # recompiles every .bicep and fails if
+      the committed ARM is stale'
+    result: no drift — committed ARM matches the Bicep source; 9/9 templates valid
+    run_on: '2026-08-25'
+    tool_version: Bicep CLI 0.44.1
+  note: Compiled from the Bicep, never hand-written. This is what the Deploy-to-Azure button serves, so
+    drift between the two would mean the portal path and the CLI path deploy different infrastructure.
+    CI enforces that they match.
+- kind: arm-ui
+  external_path: templates/azure/bicep/source/eventhub-source.createUiDefinition.json
+  provenance: validated
+  scope: resourceGroup
+  validation:
+    command: 'python3 solutions/scripts/validate-templates.py  # checks every UI output is a real template
+      parameter and every required parameter is supplied'
+    result: 'ok — warn: 6 optional parameter(s) use defaults: createDiagnosticsSendRule, diagnosticsSendRuleName,
+      eventHubs, minimumTlsVersion, storageAccountId, tags'
+    run_on: '2026-08-25'
+  note: Portal wizard. The UI-to-parameter contract is machine-checked, which is what stops the class
+    of bug where a wizard collects a value the template has no parameter to receive and silently discards
+    it.
+- kind: azure-cli
+  provenance: schema-reviewed
+  scope: resourceGroup
+  inline: "# Deploy the full template (preferred — one command, all guardrails)\naz deployment group create\
+    \ \\\n  --resource-group rg-abstract \\\n  --template-file solutions/templates/source/eventhub-source.bicep\
+    \ \\\n  --parameters namespaceName=<globally-unique-name> \\\n               sku=Standard \\\n   \
+    \            defaultPartitionCount=4 \\\n               defaultRetentionDays=7 \\\n              \
+    \ consumerGroupName=abstract\n\n# Preview before applying — always do this against an existing environment\n\
+    az deployment group what-if \\\n  --resource-group rg-abstract \\\n  --template-file solutions/templates/source/eventhub-source.bicep\
+    \ \\\n  --parameters namespaceName=<globally-unique-name>\n\n# Read back the outputs the downstream\
+    \ templates need\naz deployment group show -g rg-abstract -n eventhub-source \\\n  --query properties.outputs.abstractOnboarding.value\n"
+  note: Hand-rolling the individual `az eventhubs namespace create` / `eventhub create` / `consumer-group
+    create` calls is possible but loses the checkpoint storage account, the split producer/consumer credentials
+    and the networking guardrails. Deploy the template; use raw CLI only to inspect.
+- kind: powershell
+  external_path: templates/azure/scripts/Deploy-AbstractEventHub.ps1
+  provenance: validated
+  scope: resourceGroup
+  validation:
+    command: '[System.Management.Automation.Language.Parser]::ParseFile() over every .ps1  (the repo CI
+      powershell-lint job, run locally)'
+    result: ok — parses with no errors
+    run_on: '2026-08-25'
+  note: For teams standardised on PowerShell, and the natural choice inside Azure Cloud Shell.
+- kind: terraform
+  provenance: schema-reviewed
+  scope: resourceGroup
+  inline: "# Equivalent shape in azurerm. NOT a like-for-like replacement for the Bicep:\n# it omits the\
+    \ networking guardrails and the safe-mode logic. Written to the\n# current provider schema; NOT validated\
+    \ or applied — no Azure credentials here.\n\nresource \"azurerm_eventhub_namespace\" \"abstract\"\
+    \ {\n  name                     = var.namespace_name\n  location                 = var.location\n\
+    \  resource_group_name      = var.resource_group_name\n  sku                      = \"Standard\"\n\
+    \  capacity                 = 1\n  auto_inflate_enabled     = true\n  maximum_throughput_units = 20\n\
+    \  minimum_tls_version      = \"1.2\"\n  tags                     = var.tags\n}\n\nresource \"azurerm_eventhub\"\
+    \ \"hub\" {\n  for_each          = toset(var.log_sources)   # [\"activity\", \"entra\", \"defender\"\
+    ]\n  name              = \"abs-${var.environment}-${each.key}\"\n  namespace_name    = azurerm_eventhub_namespace.abstract.name\n\
+    \  resource_group_name = var.resource_group_name\n  partition_count   = 4     # cannot be reduced\
+    \ later; Standard cannot raise it either\n  message_retention = 7\n}\n\nresource \"azurerm_eventhub_consumer_group\"\
+    \ \"abstract\" {\n  for_each            = azurerm_eventhub.hub\n  name                = \"abstract\"\
+    \n  namespace_name      = azurerm_eventhub_namespace.abstract.name\n  eventhub_name       = each.value.name\n\
+    \  resource_group_name = var.resource_group_name\n}\n\n# Listen-only rule for the Abstract consumer\n\
+    resource \"azurerm_eventhub_namespace_authorization_rule\" \"abstract_listen\" {\n  name         \
+    \       = \"abstract-access\"\n  namespace_name      = azurerm_eventhub_namespace.abstract.name\n\
+    \  resource_group_name = var.resource_group_name\n  listen = true\n  send   = false\n  manage = false\n\
+    }\n\n# Send-only rule for the log producers (diagnostic settings)\nresource \"azurerm_eventhub_namespace_authorization_rule\"\
+    \ \"diagnostics_send\" {\n  name                = \"abstract-diagnostics-send\"\n  namespace_name\
+    \      = azurerm_eventhub_namespace.abstract.name\n  resource_group_name = var.resource_group_name\n\
+    \  listen = false\n  send   = true\n  manage = false\n}\n\n# Entra RBAC path — preferred over SAS\n\
+    resource \"azurerm_role_assignment\" \"abstract_receiver\" {\n  scope                = azurerm_eventhub_namespace.abstract.id\n\
+    \  role_definition_name = \"Azure Event Hubs Data Receiver\"\n  principal_id         = var.abstract_principal_object_id\
+    \  # Enterprise App object ID\n}\n"
+  note: Use this when the customer's platform team is Terraform-only and will not accept Bicep. Be explicit
+    with them that it is the reduced-guardrail version. Pulumi and CDKTF wrap the same azurerm provider
+    and inherit the same behaviour and the same gaps — they are not a third option, they are a different
+    syntax over this one.
+delivery_surfaces:
+- console
+- cli
+- ci-github-actions
+- ci-azure-devops
+- terraform-cloud
+- octopus
+verification:
+- check: The namespace exists, is Active, and the hubs and consumer group were created
+  where: cloud-cli
+  command: 'az eventhubs namespace show -g rg-abstract -n <namespace> --query "{status:status,sku:sku.name,tls:minimumTlsVersion}"
+
+    az eventhubs eventhub list -g rg-abstract --namespace-name <namespace> --query "[].name"
+
+    az eventhubs eventhub consumer-group list -g rg-abstract --namespace-name <namespace> --eventhub-name
+    <hub> --query "[].name"
+
+    '
+  healthy: Status "Active", SKU Standard, and a consumer group named "abstract" alongside $Default.
+  unhealthy_means: If only $Default exists you are on Basic, or the consumer group step was skipped.
+- check: Messages are actually arriving in the hub — i.e. the PRODUCER side works
+  where: cloud-console
+  healthy: Namespace → Metrics → Incoming Messages shows a non-zero, continuous line after a diagnostic
+    setting has been pointed at the hub.
+  unhealthy_means: Zero incoming means no producer is writing. The hub is fine; the diagnostic setting
+    is missing, misconfigured, or blocked by the namespace firewall. Do not debug Abstract for this.
+- check: Abstract is consuming — i.e. the CONSUMER side works
+  where: cloud-console
+  healthy: Namespace → Metrics → Outgoing Messages tracks Incoming Messages. A persistent gap between
+    the two means events are arriving faster than they are being read.
+  unhealthy_means: Incoming healthy but Outgoing flat = the consumer is not connected. Check credentials,
+    the consumer group name, and (AMQP mode) the checkpoint container.
+- check: Events are landing in Abstract and parsing into ACS
+  where: abstract-ui
+  healthy: Search the tenant for events from the Azure integration over the last 15 minutes and confirm
+    a non-zero count.
+  unhealthy_means: Outgoing Messages non-zero but nothing in Abstract points at the parser or the pipeline,
+    not the transport.
+- check: The fields that matter are populated, not just the byte count
+  where: abstract-ui
+  healthy: Spot-check cloud.project_id (the SUBSCRIPTION id), cloud.origin.account_id (the tenant id),
+    related.user, and cloud.region on a sample event.
+  unhealthy_means: Events arriving with empty identity fields means the parser matched a generic path.
+    Note that 0.7.1 specifically fixed subscription/tenant confusion in cloud.project_id and user identity
+    being dropped on Key Vault events — if you see those symptoms, check the integration version before
+    debugging anything else.
+troubleshooting:
+- symptom: Abstract shows zero events, and no error anywhere
+  likely_cause: Abstract is pointed at the $Default consumer group, which something else is also reading.
+    The two consumers split partition leases between them, so each sees a fraction of the stream and neither
+    reports a fault.
+  check: Confirm the integration's consumer-group field is "abstract", and that nothing else uses that
+    group.
+  fix: Create and use a dedicated consumer group per consumer. Never share one.
+  silent: true
+- symptom: Incoming Messages is zero after creating a diagnostic setting
+  likely_cause: The namespace firewall is in Deny mode because allowedIpRanges was populated, and allowAzureServices
+    was left false — so Azure Monitor's own delivery is blocked.
+  check: Namespace → Networking. Look at the default action and the trusted-services bypass.
+  fix: Set allowAzureServices=true. Azure Monitor delivery is a trusted-service path and needs that bypass
+    whenever the firewall denies by default.
+- symptom: The consumer restarts and replays events it has already processed
+  likely_cause: AMQP ingestion mode with no reachable checkpoint container, so no offset is ever committed.
+  check: Confirm the storage account and the private blob container exist and that Abstract has Storage
+    Blob Data Contributor on them.
+  fix: Create the container, grant the role. Or switch to Kafka ingestion mode, which commits offsets
+    to Event Hubs and needs no storage at all.
+- symptom: Policy assignment reports subscriptions non-compliant, but nothing is ever fixed
+  likely_cause: DeployIfNotExists evaluates on resource create/update. During an evaluation cycle it MARKS
+    matching resources non-compliant and takes no action. Without a remediation task, the existing estate
+    never onboards.
+  check: Azure Policy → Remediation. Is there a task at all, and did it run?
+  fix: Create and run a remediation task. The Deploy-AbstractLogStreams.sh -a Remediate action does this.
+- symptom: The IP allowlist you configured is not in effect
+  likely_cause: 'safeMode is on, and the template computes effectiveIpRules = safeMode ? [] : cleanedIpRanges
+    — so safeMode SILENTLY DISCARDS allowedIpRanges. The deployment succeeds and reports no warning.'
+  check: Namespace → Networking. Compare the rules present against what you passed.
+  fix: Turn safeMode off if you actually want the allowlist enforced. Verify in the portal rather than
+    trusting the deployment output.
+- symptom: Remediation task fails with AuthorizationFailed against a bare GUID
+  likely_cause: The policy assignment's managed identity lacks a role on a resource outside the assignment
+    scope — almost always listKeys on the Event Hub authorization rule when the namespace lives in a different
+    subscription.
+  check: Policy → Remediation → the failed task → Related events. The message names the principal by object
+    ID only, with no display name, which is why operators cannot identify it.
+  fix: Grant the remediation identity read + listKeys on the authorization rule. Note the assignPermissions/strongType
+    flag on the policy parameter is a PORTAL-ONLY convenience and does nothing for a Bicep or CLI deployment.
+- symptom: Deployment fails partway — the namespace is created but the role assignment 403s
+  likely_cause: The deployer has Contributor, which can create resources but cannot create role assignments.
+    Granting RBAC is a separate right.
+  check: az role assignment list --assignee <deployer> --scope <rg> and look for Owner, User Access Administrator,
+    or RBAC Administrator.
+  fix: Grant Role Based Access Control Administrator on the resource group, then re-run. The deployment
+    is idempotent.
+- symptom: Role assignment fails with PrincipalNotFound on a freshly created service principal
+  likely_cause: Entra directory replication delay — the SP exists but is not yet visible to ARM.
+  check: Confirm the object ID is the Enterprise Application object ID, not the app/client ID.
+  fix: The template sets principalType=ServicePrincipal specifically to avoid this. If hand-rolling, set
+    it, or wait a few minutes and re-run.
+- symptom: Throughput is capped and events lag behind during bursts
+  likely_cause: Throughput Unit saturation, or more consumers than partitions.
+  check: Namespace → Metrics → Throttled Requests. Compare num_consumers against the hub's partition count.
+  fix: Enable Auto-Inflate with a sensible ceiling. Never set num_consumers above the partition count
+    — surplus consumers get no partition and idle. If partitions are the constraint, you must create a
+    new hub; Standard cannot resize them.
+- symptom: The checkpoint container was lost and a chunk of buffered data vanished
+  likely_cause: With no checkpoint the processor resumes from its configured DEFAULT POSITION. If that
+    default is "latest", everything still buffered in the hub is skipped rather than read.
+  check: Confirm the checkpoint container exists and holds lease blobs per partition.
+  fix: Treat the checkpoint account as production state, not scratch. Consider Kafka ingestion mode, which
+    commits offsets to Event Hubs and removes this failure mode entirely.
+  silent: true
+- symptom: The consumer stopped and nothing alerted, because no metric went red
+  likely_cause: Event Hubs publishes NO consumer-lag metric on Standard (ConsumerLag exists only in ApplicationMetricsLogs
+    on Premium/Dedicated). IncomingMessages stays perfectly healthy while nothing is being read, so every
+    naive dashboard looks fine.
+  check: Compare OutgoingBytes and ActiveConnections against IncomingMessages. A stopped consumer is OutgoingBytes
+    -> 0 with IncomingMessages unchanged.
+  fix: Deploy azure.event-hub.health-alerts, which does exactly this — a log-search rule whose KQL always
+    returns a row, because sparse metrics emit nothing rather than zero and a metric alert on "nothing"
+    never fires. It also covers ingestion-stopped, throttling, credential errors and quota ceilings.
+  silent: true
+- symptom: The Event Hubs bill stepped up after a traffic spike and never came back down
+  likely_cause: Auto-Inflate scales throughput units UP and, per Microsoft, does not scale them back down.
+    One spike sets a permanent new floor — and because Capture is metered per TU, it inflates that line
+    too.
+  check: Namespace -> Scale. Compare current TUs against steady-state need. Review AutoScaleLogs.
+  fix: Lower the TU count by hand and set maxThroughputUnits to a considered ceiling rather than a comfortable
+    one. The template ships capacity=1 with a 20x ceiling and no alert.
+- symptom: Removing a hub from hubSources does not remove the hub
+  likely_cause: ARM Incremental mode is additive-only and never reconciles removals.
+  check: Compare az eventhubs eventhub list against the hubSources parameter.
+  fix: Delete the orphan explicitly, or use deployment stacks with --action-on-unmanage deleteResources.
+    Note that renaming via hubPrefix/environment/namespaceName does the same thing — it orphans the old
+    hub AND every Abstract integration pointed at it.
+- symptom: Data is missing for a period after an outage, and cannot be recovered
+  likely_cause: Retention expired while the consumer was down. Basic tier is 1 day; Standard defaults
+    can be as low as 1.
+  check: Event Hub → Properties → Message retention.
+  fix: Set retention to 7 days on Standard. Retention is your entire recovery window — size it for a long
+    weekend, not an afternoon.
+  silent: true
+- symptom: Duplicate events downstream
+  likely_cause: Delivery is at-least-once by design. A crash before offset commit, or a consumer group
+    rebalance, replays the uncommitted batch.
+  check: Correlate on partition plus offset/sequence number.
+  fix: Expected behaviour, not a defect — 0.7.0 hardened both paths to strict at-least-once deliberately.
+    Deduplicate downstream on partition + offset if exactly-once matters.
+cost:
+  drivers:
+  - driver: Throughput Units (Standard) or Processing Units (Premium)
+    charged_on: provisioned unit-hours
+    side: customer-cloud
+    note: A STEP function, not linear. You pay for provisioned capacity whether or not you use it.
+  - driver: Ingress events
+    charged_on: per million events
+    side: customer-cloud
+  - driver: Checkpoint storage account
+    charged_on: capacity plus transactions
+    side: customer-cloud
+    note: Small, and avoidable entirely in Kafka ingestion mode.
+  - driver: Bandwidth out of Azure to Abstract
+    charged_on: GB egressed
+    side: customer-cloud
+  - driver: Capture (if enabled)
+    charged_on: per throughput unit-hour, plus the destination storage
+    side: customer-cloud
+    note: Off by default. Do not enable it unless something actually reads the captured files.
+  - driver: Diagnostic settings and Azure Policy assignments
+    charged_on: nothing — these are free
+    side: customer-cloud
+    note: Worth saying out loud. The governance layer costs nothing; only the hub does.
+  surprise_line: Auto-Inflate scales Throughput Units UP automatically and never scales them back DOWN.
+    One traffic spike silently sets a new floor on the monthly bill, and nobody notices because nothing
+    failed. Review provisioned TUs monthly and lower them by hand.
+  volume_shape: 'TU = max(peak MB/s, peak events/s / 1000, peak egress / 2), sized on a MEASURED peak,
+    not an average — then check retained volume against the 84 GB-per-TU included allowance. Going over
+    bills the overage rather than losing data, so that is a budgeting check, not a capacity one. 100 GB/day
+    lands at ~4 TU with 8 partitions provisioned. 1 TB/day at a 3x peak needs ~37 TU and ~37 partitions
+    and therefore DOES NOT FIT STANDARD AT ALL — 40 TU ceiling and a hard, immutable 32-partition limit
+    — forcing either multiple namespaces or ~6 PU of Premium. Microsoft publishes the category ratio:
+    non-interactive and service-principal sign-ins run 5-10x larger than interactive sign-ins.'
+  savings:
+  - One namespace serving the whole estate rather than one per subscription.
+  - Kafka ingestion mode removes the checkpoint storage account entirely.
+  - Selecting diagnostic-setting categories deliberately rather than exporting allLogs.
+reviews:
+  cloud_architect: 'Event Hubs is the correct buffer for Azure-native security telemetry. But it is a
+    buffer with a **hard clock** and, on Standard, no consumer-side instrumentation.
+
+
+    Standard tops out at 7 days retention and includes 84 GB of event storage per throughput unit. That
+    84 GB is an **allowance, not a cap** — a 1-TU namespace holding a busy estate for seven days produces
+    a surprise bill, not dropped data. The clock is the hard limit; the 84 GB is the expensive one.
+
+
+    **Shape the deployment around the three things that are immutable at create time.**
+
+
+    - **Region.** Azure Monitor rejects any diagnostic setting whose regional source and hub disagree.
+    That forces one namespace and one policy assignment per region for resource logs. Activity Log, Entra
+    and Defender are scope-free and need only one.
+
+    - **Partition count.** Unchangeable on Standard. It caps per-hub throughput and consumer parallelism
+    at the same time, and it costs nothing — so never leave it at 4.
+
+    - **Tier.** Only Premium reaches 90-day retention, geo-replication and dynamic partition scale-out.
+
+
+    Put the namespace in a dedicated platform subscription, so workload owners cannot delete their own
+    audit trail.
+
+
+    **The least-obvious failure mode is compound, and on Standard no Azure alarm covers any part of it:**
+
+
+    1. There is no consumer-lag metric on that tier, so a stalled reader is invisible.
+
+    2. Retention then expires with no metric, no log and no dead-letter.
+
+    3. If the checkpoint container is lost, the processor resumes from its configured default position
+    — and if that default is "latest", everything still buffered is silently discarded.
+
+
+    Three independent paths to permanent, unalarmed loss of security logs, all while every health dashboard
+    stays green.'
+  devops: '**The artifact is additive-only.** ARM Incremental mode never reconciles removals, so a hub
+    dropped from `hubSources` keeps running and keeps billing.
+
+
+    **`hubPrefix`, `environment`, `hubSources` and `namespaceName` are effectively immutable.** Changing
+    any of them renames a hub and silently orphans it — along with every Abstract integration pointed
+    at it.
+
+
+    **Partition count is the classic replacement trap, and the answer is tier-dependent.** On Basic and
+    Standard it cannot be changed after creation at all. Only Premium and Dedicated allow an increase,
+    never a decrease. Over-provision at creation: partitions are free, because billing follows TUs and
+    PUs.
+
+
+    **The subtler trap is Auto-Inflate mutating `sku.capacity` server-side.** Every `what-if` then shows
+    a phantom capacity diff, and every re-apply either deflates the namespace or must explicitly ignore
+    the field. Treat `what-if` as a review aid here — never as a "must be empty" CI gate.
+
+
+    **Terraform reaches parity**, including the tenant-scope `azurerm_monitor_aad_diagnostic_setting`,
+    and adds the removal reconciliation Bicep lacks. What it loses is the portal Deploy-to-Azure button
+    that makes customer-run onboarding work.
+
+
+    **Day 2 is dominated by one gap.** Event Hubs publishes no consumer-lag metric **on Standard** — `ConsumerLag`
+    exists only in ApplicationMetricsLogs on Premium and Dedicated, which is a genuine argument for Premium.
+    On Standard, a silently-stopped consumer is visible only as `OutgoingBytes` and `ActiveConnections`
+    falling to zero while `IncomingMessages` stays healthy.'
+  security_iam: 'Use a **split-credential** design.
+
+
+    **Consumer side — Entra service principal.** Azure Event Hubs Data Receiver (`a638d3c7-ab3a-418d-83e6-5f17a39d4fde`)
+    scoped to a single consumer group, with event-hub scope as the tested fallback. Plus Storage Blob
+    Data Contributor scoped to the checkpoint **container** — never the namespace, never the whole storage
+    account.
+
+
+    **Producer side — a separate Send-purposed SAS rule.** Azure Monitor''s Event Hubs destination is
+    defined entirely in terms of a shared access policy and has no managed-identity option. So while diagnostic
+    settings are a producer, a fully SAS-free namespace is impossible.
+
+
+    That asymmetry is the most misunderstood fact in this pipeline.
+
+
+    **The permission surprises that stall onboardings are about scope HEIGHT, not role name:**
+
+
+    - Entra tenant diagnostic settings need the **Security Administrator directory role**. An Azure subscription
+    Owner cannot do it. Neither can a management-group Owner.
+
+    - Management-group policy assignment needs role-assignment write **at the MG**.
+
+    - Microsoft Graph **application** permissions can only be consented by Privileged Role Administrator
+    or Global Administrator.'
+  finops: 'Cost is TU-hours × rate, plus ingress events, Capture, retention overage, checkpoint transactions,
+    egress, and platform-log export. **The shape matters more than the rates.**
+
+
+    Throughput units are a **step function** — whole units, billed hourly, 1-hour minimum, 40 maximum,
+    where 1 TU = 1 MB/s or 1,000 events/s. Capture on Standard is a step billed per month per TU. The
+    84 GB-per-TU retention allowance is another step boundary. Only ingress events, blob transactions
+    and egress are linear.
+
+
+    **The surprise line is Auto-Inflate.** It scales throughput units up and, in Microsoft''s own words,
+    "doesn''t automatically scale down the number of TUs when ingress or egress rates drop below the limits."
+
+
+    So one traffic spike ratchets the namespace to a higher step **permanently** — and because Capture
+    is metered per TU, it silently inflates that bill too. The template ships `capacity=1` with `maxThroughputUnits=20`:
+    a 20× ceiling with no alert and no deflate job anywhere.
+
+
+    **Close seconds:**
+
+
+    - Egress to a SaaS consumer outside the region — roughly 30 TB/month at 1 TB/day
+
+    - Retained-but-undelivered messages when a consumer stalls
+
+    - Capture left on "just in case", writing empty files as billable blob writes
+
+    - The Azure Monitor **platform-logs per-GB export charge**, which everyone models at zero because
+    the diagnostic-setting resource itself is free
+
+
+    **Sizing:** TU = max(peak MB/s, peak events/s ÷ 1000, peak egress ÷ 2).
+
+
+    100 GB/day lands at about 4 TU with 8 partitions. 1 TB/day at 3× peak needs about 37 TU and 37 partitions
+    — and **therefore does not fit Standard at all**, which ceilings at 40 TU and hard-caps partitions
+    at 32, immutably. That forces multiple namespaces, or roughly 6 PU of Premium.'
+  soc: '**Highest value per GB is the Activity Log `Administrative` category** — every ARM create/update/delete
+    and every RBAC change. By Microsoft''s own statement it "doesn''t typically capture read operations",
+    so it stays small.
+
+
+    **Then, in order:** Entra `AuditLogs`; Entra interactive `SignInLogs`; Activity Log `Security` (Defender
+    alerts, effectively free); and Key Vault `AuditEvent` — the **only** place secret reads (`SecretGet`)
+    are visible, because the subscription Activity Log carries management-plane vault operations only.
+
+
+    **Defer** `NonInteractiveUserSignInLogs`, Storage `StorageRead` and AKS `kube-audit` until volume
+    is measured.
+
+
+    **Eligibility fact that changes sizing: NSG and VNet flow logs cannot reach an Event Hub at all.**
+    The `flowLogs` resource has a required `storageId` and no Event Hub property. So Azure''s overall
+    volume monster never touches this pipeline. The Event-Hub-eligible monster is AKS `kube-audit` — use
+    `kube-audit-admin`, which excludes `get` and `list`.
+
+
+    **In Abstract specifically,** `azure_eventhub` 0.7.1 maps `operationName` to a **flat** `action` field
+    — there is no `event.action` in ACS. It maps `callerIpAddress` to `source_address`, `resultType` to
+    `event.outcome`, `correlationId` to `event.id`, and writes the raw Azure category into `event.category`.
+    That last one is a dynamic text field where `term` and `match` **silently return zero**, so query
+    it with `query_string`.
+
+
+    Two planning notes: roughly half of a serious Entra detection set needs the `microsoft_graph_api`
+    poll rather than Event Hub. And expect a **24-hour-to-3-day first-data delay** on Entra, with no backfill
+    — do not declare it broken on day one.'
+faq:
+- q: Do we need one Event Hub per subscription?
+  a: No. One namespace, with one hub per LOG SOURCE, serves an entire estate — dozens of subscriptions
+    all deliver into the same hubs. Scale the namespace's throughput units, not the number of namespaces.
+  asked_by: Recurring — asked on most Azure onboardings
+- q: Will subscriptions we create next year be included automatically?
+  a: 'Not by this template on its own — it builds the hub, which has no notion of subscriptions. Assign
+    the log-streams policy at a management group and the answer becomes yes: current and future subscriptions
+    onboard themselves, and a deleted diagnostic setting is put back.'
+  asked_by: Recurring
+- q: Can we avoid handing over a connection string?
+  a: Yes. Set enableRbac=true and give Abstract's service principal the Azure Event Hubs Data Receiver
+    role on the namespace. Set enableSas=false to disable local auth entirely. Use the Enterprise Application
+    object ID, not the client ID.
+  asked_by: Recurring — every regulated customer
+- q: Do we really need the storage account?
+  a: Only in AMQP ingestion mode, where it holds the consumer's checkpoints. In Kafka mode (Standard tier
+    and above, added in integration 0.7.0) offsets commit to Event Hubs and no storage account is needed.
+    Decide the mode before you deploy.
+- q: What happens if the Abstract consumer is down for a weekend?
+  a: Nothing is lost as long as the outage is shorter than the hub's message retention. That is exactly
+    what retention is for — set it to 7 days on Standard. At Basic's 1-day ceiling, a Friday-evening outage
+    is unrecoverable by Monday.
+detections_unlocked:
+- detection: Diagnostic setting deleted or modified (the blinding attack)
+  acs_fields:
+  - action
+  - related.user
+  - cloud.project_id
+  mitre:
+  - T1562.008
+- detection: Privileged role assignment change
+  acs_fields:
+  - action
+  - related.user
+  mitre:
+  - T1098
+- detection: Key Vault secret or credential access
+  acs_fields:
+  - related.user
+  - action
+  mitre:
+  - T1552
+related_nodes:
+- azure.event-hub.health-alerts
+- azure.activity-log.subscription
+- azure.entra.diagnostics
+- azure.policy.log-streams
+references:
+- title: Abstract-MS-Azure — eventhub-source.bicep (v2.0, canonical template)
+  url: https://github.com/IamABS3C/Abstract-MS-Azure-/blob/main/solutions/templates/source/eventhub-source.bicep
+  tier: internal-repo
+  retrieved: '2026-08-25'
+  supports: Every parameter, output and guardrail described in this node; validated 9/9 on 2026-08-25.
+- title: Abstract integration catalog — default.azure_eventhub 0.7.1 changelog
+  url: https://api.abstractsecurity.app/v1/integrations/default.azure_eventhub.0_7_1
+  tier: internal-repo
+  retrieved: '2026-08-25'
+  supports: Kafka vs AMQP ingestion modes, offsets committed to Event Hubs in Kafka mode, num_consumers
+    capped at partition count, at-least-once delivery, and the 0.7.1 cloud.project_id / related.user fixes.
+- title: Azure Event Hubs quotas and limits
+  url: https://learn.microsoft.com/azure/event-hubs/event-hubs-quotas
+  tier: vendor-doc
+  retrieved: '2026-08-25'
+  supports: Throughput-unit and partition ceilings, retention limits per tier.
+- title: Stream Azure Monitor platform logs to Event Hubs
+  url: https://learn.microsoft.com/azure/azure-monitor/essentials/diagnostic-settings
+  tier: vendor-doc
+  retrieved: '2026-08-25'
+  supports: Diagnostic settings as the producer path into Event Hubs, and the trusted-service delivery
+    behaviour.
+- title: Authorize access to Event Hubs with Microsoft Entra ID
+  url: https://learn.microsoft.com/azure/event-hubs/authorize-access-azure-active-directory
+  tier: vendor-doc
+  retrieved: '2026-08-25'
+  supports: Azure Event Hubs Data Receiver as the least-privilege consumer role.

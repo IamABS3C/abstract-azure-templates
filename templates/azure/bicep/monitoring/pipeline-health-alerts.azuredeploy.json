@@ -1,0 +1,338 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.44.1.10279",
+      "templateHash": "5386177702072629601"
+    }
+  },
+  "parameters": {
+    "namespaceName": {
+      "type": "string",
+      "minLength": 6,
+      "maxLength": 50,
+      "metadata": {
+        "description": "Name of the existing Event Hubs namespace to monitor. Must already exist - deploy eventhub-source.bicep first."
+      }
+    },
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Location for the scheduled query rule. Metric alerts are global; this only affects the log-search rule."
+      }
+    },
+    "alertPrefix": {
+      "type": "string",
+      "defaultValue": "abstract-eh",
+      "minLength": 2,
+      "maxLength": 20,
+      "metadata": {
+        "description": "Prefix for every alert rule name created here."
+      }
+    },
+    "actionGroupId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Action Group resource ID to notify. Leave empty to create the rules WITHOUT notifications - they will still show in Azure Monitor, but nobody will be told. Strongly recommended to supply one."
+      }
+    },
+    "createDisabled": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Create the rules in a disabled state so they can be reviewed before they start firing."
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Tags applied to every resource created by this template."
+      }
+    },
+    "consumerStallWindowMinutes": {
+      "type": "int",
+      "defaultValue": 30,
+      "minValue": 5,
+      "maxValue": 360,
+      "metadata": {
+        "description": "Minutes of collapsed outgoing traffic before the consumer is considered stalled. Keep this comfortably longer than the consumer poll interval so a normal quiet period does not page anyone."
+      }
+    },
+    "minIncomingToAlert": {
+      "type": "int",
+      "defaultValue": 100,
+      "minValue": 1,
+      "metadata": {
+        "description": "Incoming messages over the window ABOVE which a flat outgoing count is treated as a stall. Guards against alerting on a genuinely idle hub, where zero-in/zero-out is correct and healthy."
+      }
+    },
+    "ingestionStoppedWindowMinutes": {
+      "type": "int",
+      "defaultValue": 60,
+      "minValue": 5,
+      "maxValue": 1440,
+      "metadata": {
+        "description": "Minutes with zero incoming messages before ingestion is considered stopped. This is the producer side - a deleted diagnostic setting, a revoked Send key, or a firewall change."
+      }
+    },
+    "throttleThreshold": {
+      "type": "int",
+      "defaultValue": 10,
+      "minValue": 1,
+      "metadata": {
+        "description": "Throttled requests over 5 minutes before alerting. Any sustained throttling means throughput units are saturated."
+      }
+    },
+    "dataLossSeverity": {
+      "type": "int",
+      "defaultValue": 1,
+      "allowedValues": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "metadata": {
+        "description": "Severity for the data-loss alerts (consumer stalled, ingestion stopped). 0 = critical."
+      }
+    },
+    "capacitySeverity": {
+      "type": "int",
+      "defaultValue": 2,
+      "allowedValues": [
+        0,
+        1,
+        2,
+        3,
+        4
+      ],
+      "metadata": {
+        "description": "Severity for the capacity and cost alerts."
+      }
+    }
+  },
+  "variables": {
+    "actions": "[if(empty(parameters('actionGroupId')), createArray(), createArray(createObject('actionGroupId', parameters('actionGroupId'))))]",
+    "scheduledQueryActions": "[if(empty(parameters('actionGroupId')), createObject(), createObject('actionGroups', createArray(parameters('actionGroupId'))))]",
+    "ruleState": "[if(parameters('createDisabled'), false(), true())]",
+    "consumerStallQueryTemplate": "let window = __WINDOW__m;\nlet minIncoming = __MIN_INCOMING__;\nlet measured =\n    AzureMetrics\n    | where ResourceId =~ '__RESOURCE_ID__'\n    | where TimeGenerated > ago(window)\n    | where MetricName in ('IncomingMessages', 'OutgoingMessages')\n    | summarize Value = sum(Total) by MetricName\n    | summarize\n        IncomingMessages = sumif(Value, MetricName == 'IncomingMessages'),\n        OutgoingMessages = sumif(Value, MetricName == 'OutgoingMessages');\n// Event Hubs emits NO rows when nothing is consuming. Union a synthetic zero so the query\n// always returns exactly one row and \"no data\" becomes an alertable condition rather than an\n// evaluation that silently never runs.\nlet synthetic = datatable(IncomingMessages: real, OutgoingMessages: real) [ 0.0, 0.0 ];\nunion measured, synthetic\n| top 1 by IncomingMessages desc\n| extend Stalled = iff(IncomingMessages >= minIncoming and OutgoingMessages == 0, 1, 0)\n| where Stalled == 1\n| project IncomingMessages, OutgoingMessages, Stalled\n",
+    "consumerStallQuery": "[replace(replace(replace(variables('consumerStallQueryTemplate'), '__WINDOW__', string(parameters('consumerStallWindowMinutes'))), '__MIN_INCOMING__', string(parameters('minIncomingToAlert'))), '__RESOURCE_ID__', resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName')))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Insights/scheduledQueryRules",
+      "apiVersion": "2023-03-15-preview",
+      "name": "[format('{0}-consumer-stalled', parameters('alertPrefix'))]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "displayName": "[format('{0}: Abstract consumer stalled (outgoing collapsed, incoming healthy)', parameters('alertPrefix'))]",
+        "description": "Event Hubs publishes no consumer-lag metric, so a stalled consumer is invisible until retention expires and the data is permanently gone. This rule infers the stall from outgoing traffic collapsing while incoming traffic continues. The query synthesises a zero row when the metric is absent, because Event Hubs emits no datapoints at all rather than zeros when nothing is consuming - a plain metric alert would sit in Insufficient Data forever.",
+        "severity": "[parameters('dataLossSeverity')]",
+        "enabled": "[variables('ruleState')]",
+        "evaluationFrequency": "PT5M",
+        "windowSize": "[format('PT{0}M', parameters('consumerStallWindowMinutes'))]",
+        "scopes": [
+          "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName'))]"
+        ],
+        "criteria": {
+          "allOf": [
+            {
+              "query": "[variables('consumerStallQuery')]",
+              "timeAggregation": "Count",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "failingPeriods": {
+                "numberOfEvaluationPeriods": 1,
+                "minFailingPeriodsToAlert": 1
+              }
+            }
+          ]
+        },
+        "autoMitigate": true,
+        "actions": "[variables('scheduledQueryActions')]"
+      }
+    },
+    {
+      "type": "Microsoft.Insights/metricAlerts",
+      "apiVersion": "2018-03-01",
+      "name": "[format('{0}-ingestion-stopped', parameters('alertPrefix'))]",
+      "location": "global",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "description": "No messages have arrived in the namespace. Causes, in rough order of likelihood: a diagnostic setting was deleted, the Send authorization rule was rotated or revoked, or the namespace firewall was set to Deny without allowing trusted Microsoft services (which blocks Azure Monitor's own delivery).",
+        "severity": "[parameters('dataLossSeverity')]",
+        "enabled": "[variables('ruleState')]",
+        "scopes": [
+          "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName'))]"
+        ],
+        "evaluationFrequency": "PT5M",
+        "windowSize": "[format('PT{0}M', parameters('ingestionStoppedWindowMinutes'))]",
+        "targetResourceType": "Microsoft.EventHub/namespaces",
+        "criteria": {
+          "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+          "allOf": [
+            {
+              "name": "NoIncomingMessages",
+              "metricNamespace": "Microsoft.EventHub/namespaces",
+              "metricName": "IncomingMessages",
+              "operator": "LessThanOrEqual",
+              "threshold": 0,
+              "timeAggregation": "Total",
+              "criterionType": "StaticThresholdCriterion",
+              "skipMetricValidation": false
+            }
+          ]
+        },
+        "autoMitigate": true,
+        "actions": "[variables('actions')]"
+      }
+    },
+    {
+      "type": "Microsoft.Insights/metricAlerts",
+      "apiVersion": "2018-03-01",
+      "name": "[format('{0}-throttled', parameters('alertPrefix'))]",
+      "location": "global",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "description": "Requests are being throttled, which means provisioned throughput units are saturated. Producers will retry and may eventually drop. Enable Auto-Inflate or raise the throughput unit count - and note that partitions cap parallelism independently, and cannot be increased on Standard.",
+        "severity": "[parameters('capacitySeverity')]",
+        "enabled": "[variables('ruleState')]",
+        "scopes": [
+          "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName'))]"
+        ],
+        "evaluationFrequency": "PT5M",
+        "windowSize": "PT5M",
+        "targetResourceType": "Microsoft.EventHub/namespaces",
+        "criteria": {
+          "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+          "allOf": [
+            {
+              "name": "ThrottledRequests",
+              "metricNamespace": "Microsoft.EventHub/namespaces",
+              "metricName": "ThrottledRequests",
+              "operator": "GreaterThan",
+              "threshold": "[parameters('throttleThreshold')]",
+              "timeAggregation": "Total",
+              "criterionType": "StaticThresholdCriterion",
+              "skipMetricValidation": false
+            }
+          ]
+        },
+        "autoMitigate": true,
+        "actions": "[variables('actions')]"
+      }
+    },
+    {
+      "type": "Microsoft.Insights/metricAlerts",
+      "apiVersion": "2018-03-01",
+      "name": "[format('{0}-user-errors', parameters('alertPrefix'))]",
+      "location": "global",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "description": "Client-side errors against the namespace. The most common cause by a wide margin is an expired or regenerated SAS key, which breaks producers and consumers at different moments depending on which rule was rotated. Also seen when a service principal loses its role assignment.",
+        "severity": "[parameters('capacitySeverity')]",
+        "enabled": "[variables('ruleState')]",
+        "scopes": [
+          "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName'))]"
+        ],
+        "evaluationFrequency": "PT5M",
+        "windowSize": "PT15M",
+        "targetResourceType": "Microsoft.EventHub/namespaces",
+        "criteria": {
+          "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+          "allOf": [
+            {
+              "name": "UserErrors",
+              "metricNamespace": "Microsoft.EventHub/namespaces",
+              "metricName": "UserErrors",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "timeAggregation": "Total",
+              "criterionType": "StaticThresholdCriterion",
+              "skipMetricValidation": false
+            }
+          ]
+        },
+        "autoMitigate": true,
+        "actions": "[variables('actions')]"
+      }
+    },
+    {
+      "type": "Microsoft.Insights/metricAlerts",
+      "apiVersion": "2018-03-01",
+      "name": "[format('{0}-quota-exceeded', parameters('alertPrefix'))]",
+      "location": "global",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "description": "A hard service quota was hit - connection count, throughput unit ceiling, or entity limits. Unlike throttling this will not resolve itself under lighter load; something needs to be raised or redesigned.",
+        "severity": "[parameters('capacitySeverity')]",
+        "enabled": "[variables('ruleState')]",
+        "scopes": [
+          "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName'))]"
+        ],
+        "evaluationFrequency": "PT5M",
+        "windowSize": "PT15M",
+        "targetResourceType": "Microsoft.EventHub/namespaces",
+        "criteria": {
+          "odata.type": "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria",
+          "allOf": [
+            {
+              "name": "QuotaExceededErrors",
+              "metricNamespace": "Microsoft.EventHub/namespaces",
+              "metricName": "QuotaExceededErrors",
+              "operator": "GreaterThan",
+              "threshold": 0,
+              "timeAggregation": "Total",
+              "criterionType": "StaticThresholdCriterion",
+              "skipMetricValidation": false
+            }
+          ]
+        },
+        "autoMitigate": true,
+        "actions": "[variables('actions')]"
+      }
+    }
+  ],
+  "outputs": {
+    "consumerStalledRuleId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Insights/scheduledQueryRules', format('{0}-consumer-stalled', parameters('alertPrefix')))]"
+    },
+    "ingestionStoppedRuleId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.Insights/metricAlerts', format('{0}-ingestion-stopped', parameters('alertPrefix')))]"
+    },
+    "alertRuleNames": {
+      "type": "array",
+      "value": [
+        "[format('{0}-consumer-stalled', parameters('alertPrefix'))]",
+        "[format('{0}-ingestion-stopped', parameters('alertPrefix'))]",
+        "[format('{0}-throttled', parameters('alertPrefix'))]",
+        "[format('{0}-user-errors', parameters('alertPrefix'))]",
+        "[format('{0}-quota-exceeded', parameters('alertPrefix'))]"
+      ]
+    },
+    "notificationsConfigured": {
+      "type": "bool",
+      "value": "[not(empty(parameters('actionGroupId')))]"
+    },
+    "monitoringSummary": {
+      "type": "object",
+      "value": {
+        "namespace": "[parameters('namespaceName')]",
+        "rulesCreated": 5,
+        "enabled": "[variables('ruleState')]",
+        "notificationsConfigured": "[not(empty(parameters('actionGroupId')))]",
+        "consumerStallWindowMinutes": "[parameters('consumerStallWindowMinutes')]",
+        "note": "[if(empty(parameters('actionGroupId')), 'NO ACTION GROUP SUPPLIED - rules exist but nobody will be notified. Supply actionGroupId.', 'Alerts route to the supplied action group.')]"
+      }
+    }
+  }
+}

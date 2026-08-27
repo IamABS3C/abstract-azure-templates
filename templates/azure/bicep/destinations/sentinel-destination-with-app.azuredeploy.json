@@ -1,0 +1,462 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.44.1.10279",
+      "templateHash": "4945363395078865899"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region for the workspace, DCE, DCR, Key Vault and deployment script."
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Tags applied to every resource created by this template."
+      }
+    },
+    "managedIdentityResourceId": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource ID of a user-assigned managed identity that can create Entra app registrations (holds Application Administrator or equivalent). REQUIRED."
+      }
+    },
+    "appDisplayName": {
+      "type": "string",
+      "defaultValue": "Abstract-Sentinel-App",
+      "metadata": {
+        "description": "Display name for the Entra app registration created for Abstract."
+      }
+    },
+    "secretValidityYears": {
+      "type": "int",
+      "defaultValue": 1,
+      "minValue": 1,
+      "maxValue": 2,
+      "metadata": {
+        "description": "Client-secret validity in years."
+      }
+    },
+    "secretReaderObjectId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional object ID of a user/group to grant Key Vault Secrets User (so they can read the generated secret). Leave empty to grant no reader."
+      }
+    },
+    "azCliVersion": {
+      "type": "string",
+      "defaultValue": "2.60.0",
+      "metadata": {
+        "description": "Azure CLI version for the deployment script container."
+      }
+    },
+    "secretName": {
+      "type": "string",
+      "defaultValue": "abstract-sentinel-client-secret",
+      "metadata": {
+        "description": "Name of the Key Vault secret holding the client secret."
+      }
+    },
+    "forceSecretRotation": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Force a NEW client secret even when the vault already holds a valid one.\n\nLeave false. The script now rotates only when no secret exists or the existing one\nexpires within 30 days, which makes re-running this template safe - the previous\nbehaviour minted a fresh secret on every deployment, so a re-run silently created a\nnew Key Vault version while Abstract kept using the old value.\n\nSet true only for a deliberate rotation, and update Abstract with the new value.\n"
+      }
+    },
+    "keyVaultName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Key Vault name (3-24 lowercase alphanumerics/hyphens, globally unique). Leave empty to auto-generate abstract-kv-<hash>."
+      }
+    },
+    "createWorkspace": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Create a new Log Analytics workspace. Set false to target an EXISTING workspace in THIS resource group."
+      }
+    },
+    "workspaceName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Workspace name. Creating: empty auto-generates abstract-sentinel-<hash>. Existing: the exact name (in this resource group)."
+      }
+    },
+    "existingWorkspaceLocation": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Region of the EXISTING workspace (Existing mode only). DCE/DCR must match it. Empty = use the deployment location."
+      }
+    },
+    "workspaceSku": {
+      "type": "string",
+      "defaultValue": "PerGB2018",
+      "allowedValues": [
+        "PerGB2018",
+        "CapacityReservation",
+        "Free",
+        "Standalone",
+        "PerNode"
+      ]
+    },
+    "workspaceRetentionDays": {
+      "type": "int",
+      "defaultValue": 90,
+      "minValue": 7,
+      "maxValue": 730
+    },
+    "enableSentinel": {
+      "type": "bool",
+      "defaultValue": true
+    },
+    "dataCollectionEndpointName": {
+      "type": "string",
+      "defaultValue": "abstract-dce"
+    },
+    "dataCollectionRuleName": {
+      "type": "string",
+      "defaultValue": "abstract-dcr"
+    },
+    "customTableName": {
+      "type": "string",
+      "defaultValue": "AbstractEventLogs_CL",
+      "metadata": {
+        "description": "Custom log table name. MUST end in _CL."
+      }
+    },
+    "tableColumns": {
+      "type": "array",
+      "defaultValue": [
+        {
+          "name": "TimeGenerated",
+          "type": "datetime"
+        },
+        {
+          "name": "Message",
+          "type": "string"
+        },
+        {
+          "name": "AbstractEvent",
+          "type": "dynamic"
+        }
+      ],
+      "metadata": {
+        "description": "Schema of the custom table and DCR stream. Default is the minimal wrapped-dynamic schema; replace with all_fields-derived columns for explicit ACS columns."
+      }
+    }
+  },
+  "variables": {
+    "$fxv#0": "#!/usr/bin/env bash\n# =============================================================================\n#  Abstract Security - Sentinel destination identity, hardened deploymentScript\n#\n#  Runs inside Microsoft.Resources/deploymentScripts (AzureCLI) as a\n#  user-assigned managed identity holding Application.ReadWrite.All.\n#\n#  Replaces the original 16-line inline script in\n#  templates/destinations/sentinel-destination-with-app.bicep. Same job, but it\n#  survives the three failure modes the inline version did not:\n#\n#    1. SECRET CHURN. The original called `az ad app credential reset --append`\n#       on EVERY deployment. Re-run the template and you got a brand-new secret\n#       and a new Key Vault version while the value already configured in\n#       Abstract kept working - until someone assumed the newest version was\n#       correct. Now: only mint a secret when the vault holds none with more than\n#       30 days left.\n#    2. SILENT PARTIAL SUCCESS. Every step was unguarded, so an app created\n#       without a service principal still reported success and the DCR role\n#       assignment failed later with an opaque PrincipalNotFound.\n#    3. NO OUTPUT VERIFICATION. Nothing read back what it had created.\n#\n#  Note this app needs NO Graph API permissions and NO admin consent - unlike the\n#  per-subscription collection apps. It is purely an identity that receives DCR\n#  RBAC (Monitoring Metrics Publisher + Monitoring Contributor), which the\n#  template assigns. That is why there is no consent logic here.\n#\n#  Environment (set by the template):\n#    APP_NAME       app display name - ALSO the idempotency key\n#    KV_NAME        Key Vault that receives the secret\n#    VAULT_URI      vault URI, for the returned secret reference\n#    SECRET_NAME    secret name in the vault\n#    SECRET_YEARS   secret lifetime in years\n#    FORCE_ROTATE   'true' to mint a new secret regardless of the existing one\n# =============================================================================\nset -euo pipefail\n\nlog()  { printf '==> %s\\n' \"$*\"; }\nok()   { printf '    + %s\\n' \"$*\"; }\nwarn() { printf '    ! %s\\n' \"$*\"; }\ndie()  { printf '    X %s\\n' \"$*\" >&2; exit 1; }\n\n: \"${APP_NAME:?APP_NAME not set}\"\n: \"${KV_NAME:?KV_NAME not set}\"\n: \"${SECRET_NAME:?SECRET_NAME not set}\"\n: \"${SECRET_YEARS:=1}\"\n: \"${FORCE_ROTATE:=false}\"\n\nTENANT_ID=$(az account show --query tenantId -o tsv) || die \"cannot read tenant - is the script identity attached?\"\nok \"tenant $TENANT_ID\"\n\n# --- App registration (idempotent by display name) ------------------------\nlog \"Ensuring app registration '$APP_NAME'\"\nAPP_ID=$(az ad app list --filter \"displayName eq '${APP_NAME}'\" --query '[0].appId' -o tsv 2>/dev/null || true)\nif [ -z \"$APP_ID\" ] || [ \"$APP_ID\" = \"None\" ]; then\n  APP_ID=$(az ad app create --display-name \"$APP_NAME\" --sign-in-audience AzureADMyOrg --query appId -o tsv) \\\n    || die \"app creation failed - does the script identity hold Application.ReadWrite.All with admin consent?\"\n  ok \"created app $APP_ID\"\n  sleep 15   # directory replication before the SP create\nelse\n  ok \"reusing existing app $APP_ID\"\nfi\n[ -z \"$APP_ID\" ] && die \"app id resolved empty\"\nAPP_OBJ_ID=$(az ad app show --id \"$APP_ID\" --query id -o tsv) || die \"cannot read app object id for $APP_ID\"\n\n# --- Service principal ----------------------------------------------------\n# The DCR role assignments target the SP object id, so if this is skipped the\n# template's own roleAssignments fail with PrincipalNotFound.\nlog \"Ensuring service principal\"\nSP_ID=$(az ad sp show --id \"$APP_ID\" --query id -o tsv 2>/dev/null || true)\nif [ -z \"$SP_ID\" ] || [ \"$SP_ID\" = \"None\" ]; then\n  SP_ID=$(az ad sp create --id \"$APP_ID\" --query id -o tsv) || die \"service principal creation failed\"\n  ok \"created SP $SP_ID\"\n  # Longer wait here on purpose: the template assigns DCR RBAC to this object id\n  # immediately afterwards, and RBAC on a freshly created SP is the classic\n  # PrincipalNotFound race.\n  sleep 30\nelse\n  ok \"reusing SP $SP_ID\"\nfi\n[ -z \"$SP_ID\" ] && die \"service principal id resolved empty\"\n\n# --- Secret: rotate only when necessary ----------------------------------\nlog \"Checking for a usable secret in $KV_NAME\"\nNEED_SECRET=true\nif [ \"$FORCE_ROTATE\" = \"true\" ]; then\n  warn \"FORCE_ROTATE=true - minting a new secret. Update Abstract with the new value.\"\nelse\n  if EXP=$(az keyvault secret show --vault-name \"$KV_NAME\" --name \"$SECRET_NAME\" \\\n             --query 'attributes.expires' -o tsv 2>/dev/null); then\n    if [ -n \"$EXP\" ] && [ \"$EXP\" != \"None\" ]; then\n      if python3 -c \"\nimport sys, datetime\nexp = datetime.datetime.fromisoformat('$EXP'.replace('Z', '+00:00'))\nnow = datetime.datetime.now(datetime.timezone.utc)\nsys.exit(0 if (exp - now).days > 30 else 1)\"; then\n        NEED_SECRET=false\n        ok \"existing secret valid for >30 days - NOT rotating (re-running this template is safe)\"\n      else\n        warn \"existing secret expires within 30 days - rotating\"\n      fi\n    fi\n  else\n    ok \"no existing secret in the vault\"\n  fi\nfi\n\nif [ \"$NEED_SECRET\" = true ]; then\n  log \"Generating a client secret (${SECRET_YEARS} year(s))\"\n  SECRET=$(az ad app credential reset --id \"$APP_ID\" --append \\\n    --display-name \"$SECRET_NAME\" --years \"$SECRET_YEARS\" --query password -o tsv) \\\n    || die \"secret generation failed\"\n  [ -z \"$SECRET\" ] && die \"secret generation returned empty\"\n  END=$(python3 -c \"\nimport datetime\nprint((datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(days=365*int('$SECRET_YEARS'))).strftime('%Y-%m-%dT%H:%M:%SZ'))\")\n  az keyvault secret set --vault-name \"$KV_NAME\" --name \"$SECRET_NAME\" \\\n    --value \"$SECRET\" --expires \"$END\" -o none \\\n    || die \"could not write the secret to $KV_NAME - is Key Vault Secrets Officer granted to the script identity?\"\n  unset SECRET\n  ok \"secret stored at ${KV_NAME}/${SECRET_NAME}, expires ${END}\"\n  ok \"never emitted to deployment outputs or logs\"\nfi\n\n# --- Verify what we actually created -------------------------------------\nlog \"Verifying\"\naz ad app show --id \"$APP_ID\" --query displayName -o tsv >/dev/null || die \"app not readable after creation\"\naz ad sp show --id \"$APP_ID\" --query id -o tsv >/dev/null || die \"service principal not readable after creation\"\naz keyvault secret show --vault-name \"$KV_NAME\" --name \"$SECRET_NAME\" --query id -o tsv >/dev/null \\\n  || die \"secret not present in $KV_NAME after creation\"\nok \"app, service principal and secret all verified\"\n\ncat > \"$AZ_SCRIPTS_OUTPUT_PATH\" <<JSON\n{\n  \"appId\": \"${APP_ID}\",\n  \"appObjectId\": \"${APP_OBJ_ID}\",\n  \"spObjectId\": \"${SP_ID}\",\n  \"tenantId\": \"${TENANT_ID}\",\n  \"keyVaultSecretUri\": \"${VAULT_URI:-https://${KV_NAME}.vault.azure.net/}secrets/${SECRET_NAME}\",\n  \"secretRotated\": ${NEED_SECRET},\n  \"verified\": true\n}\nJSON\nok \"done\"\n",
+    "autoWorkspaceName": "[format('abstract-sentinel-{0}', uniqueString(resourceGroup().id))]",
+    "effectiveWorkspaceName": "[if(parameters('createWorkspace'), if(empty(parameters('workspaceName')), variables('autoWorkspaceName'), parameters('workspaceName')), parameters('workspaceName'))]",
+    "workspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('effectiveWorkspaceName'))]",
+    "effectiveLocation": "[if(parameters('createWorkspace'), parameters('location'), if(empty(parameters('existingWorkspaceLocation')), parameters('location'), parameters('existingWorkspaceLocation')))]",
+    "effectiveKeyVaultName": "[if(empty(parameters('keyVaultName')), format('abstract-kv-{0}', uniqueString(resourceGroup().id)), parameters('keyVaultName'))]",
+    "streamName": "[format('Custom-{0}', parameters('customTableName'))]",
+    "logAnalyticsDestinationName": "abstractSentinelWorkspace",
+    "monitoringMetricsPublisherRoleId": "3913510d-42f4-4e42-8a64-420c390055eb",
+    "monitoringContributorRoleId": "749f88d5-cbae-40b8-bcfc-e573ddc772fa",
+    "keyVaultSecretsOfficerRoleId": "b86a8fe4-44ce-4948-aee5-eccb2c155cd6",
+    "keyVaultSecretsUserRoleId": "4633458b-17de-408a-b874-0445c86b69e6"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.KeyVault/vaults",
+      "apiVersion": "2023-07-01",
+      "name": "[variables('effectiveKeyVaultName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "sku": {
+          "family": "A",
+          "name": "standard"
+        },
+        "tenantId": "[subscription().tenantId]",
+        "enableRbacAuthorization": true,
+        "enableSoftDelete": true,
+        "softDeleteRetentionInDays": 7,
+        "publicNetworkAccess": "Enabled"
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.KeyVault/vaults', variables('effectiveKeyVaultName'))]",
+      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', variables('effectiveKeyVaultName')), parameters('managedIdentityResourceId'), variables('keyVaultSecretsOfficerRoleId'))]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.ManagedIdentity/userAssignedIdentities', last(split(parameters('managedIdentityResourceId'), '/'))), '2023-01-31').principalId]",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsOfficerRoleId'))]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('effectiveKeyVaultName'))]"
+      ]
+    },
+    {
+      "condition": "[not(empty(parameters('secretReaderObjectId')))]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.KeyVault/vaults', variables('effectiveKeyVaultName'))]",
+      "name": "[guid(resourceId('Microsoft.KeyVault/vaults', variables('effectiveKeyVaultName')), parameters('secretReaderObjectId'), variables('keyVaultSecretsUserRoleId'))]",
+      "properties": {
+        "principalId": "[parameters('secretReaderObjectId')]",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('keyVaultSecretsUserRoleId'))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('effectiveKeyVaultName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Resources/deploymentScripts",
+      "apiVersion": "2023-08-01",
+      "name": "abstract-create-app",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "kind": "AzureCLI",
+      "identity": {
+        "type": "UserAssigned",
+        "userAssignedIdentities": {
+          "[format('{0}', parameters('managedIdentityResourceId'))]": {}
+        }
+      },
+      "properties": {
+        "azCliVersion": "[parameters('azCliVersion')]",
+        "retentionInterval": "PT1H",
+        "cleanupPreference": "OnSuccess",
+        "timeout": "PT30M",
+        "environmentVariables": [
+          {
+            "name": "APP_NAME",
+            "value": "[parameters('appDisplayName')]"
+          },
+          {
+            "name": "KV_NAME",
+            "value": "[variables('effectiveKeyVaultName')]"
+          },
+          {
+            "name": "VAULT_URI",
+            "value": "[reference(resourceId('Microsoft.KeyVault/vaults', variables('effectiveKeyVaultName')), '2023-07-01').vaultUri]"
+          },
+          {
+            "name": "SECRET_NAME",
+            "value": "[parameters('secretName')]"
+          },
+          {
+            "name": "SECRET_YEARS",
+            "value": "[string(parameters('secretValidityYears'))]"
+          },
+          {
+            "name": "FORCE_ROTATE",
+            "value": "[string(parameters('forceSecretRotation'))]"
+          }
+        ],
+        "scriptContent": "[variables('$fxv#0')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.KeyVault/vaults', variables('effectiveKeyVaultName'))]",
+        "[extensionResourceId(resourceId('Microsoft.KeyVault/vaults', variables('effectiveKeyVaultName')), 'Microsoft.Authorization/roleAssignments', guid(resourceId('Microsoft.KeyVault/vaults', variables('effectiveKeyVaultName')), parameters('managedIdentityResourceId'), variables('keyVaultSecretsOfficerRoleId')))]"
+      ]
+    },
+    {
+      "condition": "[parameters('createWorkspace')]",
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('effectiveWorkspaceName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "sku": {
+          "name": "[parameters('workspaceSku')]"
+        },
+        "retentionInDays": "[parameters('workspaceRetentionDays')]",
+        "features": {
+          "enableLogAccessUsingOnlyResourcePermissions": true
+        }
+      }
+    },
+    {
+      "condition": "[and(parameters('createWorkspace'), parameters('enableSentinel'))]",
+      "type": "Microsoft.SecurityInsights/onboardingStates",
+      "apiVersion": "2024-03-01",
+      "scope": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('effectiveWorkspaceName'))]",
+      "name": "default",
+      "properties": {},
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('effectiveWorkspaceName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/tables",
+      "apiVersion": "2022-10-01",
+      "name": "[format('{0}/{1}', variables('effectiveWorkspaceName'), parameters('customTableName'))]",
+      "properties": {
+        "schema": {
+          "copy": [
+            {
+              "name": "columns",
+              "count": "[length(parameters('tableColumns'))]",
+              "input": {
+                "name": "[parameters('tableColumns')[copyIndex('columns')].name]",
+                "type": "[if(equals(toLower(string(parameters('tableColumns')[copyIndex('columns')].type)), 'datetime'), 'dateTime', toLower(string(parameters('tableColumns')[copyIndex('columns')].type)))]"
+              }
+            }
+          ],
+          "name": "[parameters('customTableName')]"
+        },
+        "totalRetentionInDays": "[parameters('workspaceRetentionDays')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('effectiveWorkspaceName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Insights/dataCollectionEndpoints",
+      "apiVersion": "2023-03-11",
+      "name": "[parameters('dataCollectionEndpointName')]",
+      "location": "[variables('effectiveLocation')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "networkAcls": {
+          "publicNetworkAccess": "Enabled"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/dataCollectionRules",
+      "apiVersion": "2023-03-11",
+      "name": "[parameters('dataCollectionRuleName')]",
+      "location": "[variables('effectiveLocation')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "dataCollectionEndpointId": "[resourceId('Microsoft.Insights/dataCollectionEndpoints', parameters('dataCollectionEndpointName'))]",
+        "streamDeclarations": {
+          "[format('{0}', variables('streamName'))]": {
+            "copy": [
+              {
+                "name": "columns",
+                "count": "[length(parameters('tableColumns'))]",
+                "input": {
+                  "name": "[parameters('tableColumns')[copyIndex('columns')].name]",
+                  "type": "[toLower(string(parameters('tableColumns')[copyIndex('columns')].type))]"
+                }
+              }
+            ]
+          }
+        },
+        "destinations": {
+          "logAnalytics": [
+            {
+              "workspaceResourceId": "[variables('workspaceResourceId')]",
+              "name": "[variables('logAnalyticsDestinationName')]"
+            }
+          ]
+        },
+        "dataFlows": [
+          {
+            "streams": [
+              "[variables('streamName')]"
+            ],
+            "destinations": [
+              "[variables('logAnalyticsDestinationName')]"
+            ],
+            "transformKql": "source",
+            "outputStream": "[variables('streamName')]"
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/tables', split(format('{0}/{1}', variables('effectiveWorkspaceName'), parameters('customTableName')), '/')[0], split(format('{0}/{1}', variables('effectiveWorkspaceName'), parameters('customTableName')), '/')[1])]",
+        "[resourceId('Microsoft.Insights/dataCollectionEndpoints', parameters('dataCollectionEndpointName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.Insights/dataCollectionRules', parameters('dataCollectionRuleName'))]",
+      "name": "[guid(resourceId('Microsoft.Insights/dataCollectionRules', parameters('dataCollectionRuleName')), 'abstract-app-metrics-publisher', variables('monitoringMetricsPublisherRoleId'))]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.Resources/deploymentScripts', 'abstract-create-app'), '2023-08-01').outputs.spObjectId]",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('monitoringMetricsPublisherRoleId'))]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deploymentScripts', 'abstract-create-app')]",
+        "[resourceId('Microsoft.Insights/dataCollectionRules', parameters('dataCollectionRuleName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.Insights/dataCollectionRules', parameters('dataCollectionRuleName'))]",
+      "name": "[guid(resourceId('Microsoft.Insights/dataCollectionRules', parameters('dataCollectionRuleName')), 'abstract-app-monitoring-contributor', variables('monitoringContributorRoleId'))]",
+      "properties": {
+        "principalId": "[reference(resourceId('Microsoft.Resources/deploymentScripts', 'abstract-create-app'), '2023-08-01').outputs.spObjectId]",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('monitoringContributorRoleId'))]",
+        "principalType": "ServicePrincipal"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deploymentScripts', 'abstract-create-app')]",
+        "[resourceId('Microsoft.Insights/dataCollectionRules', parameters('dataCollectionRuleName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "clientId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deploymentScripts', 'abstract-create-app'), '2023-08-01').outputs.appId]"
+    },
+    "applicationTenantId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deploymentScripts', 'abstract-create-app'), '2023-08-01').outputs.tenantId]"
+    },
+    "servicePrincipalObjectId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deploymentScripts', 'abstract-create-app'), '2023-08-01').outputs.spObjectId]"
+    },
+    "clientSecretKeyVaultUri": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Resources/deploymentScripts', 'abstract-create-app'), '2023-08-01').outputs.keyVaultSecretUri]"
+    },
+    "keyVaultName": {
+      "type": "string",
+      "value": "[variables('effectiveKeyVaultName')]"
+    },
+    "workspaceName": {
+      "type": "string",
+      "value": "[variables('effectiveWorkspaceName')]"
+    },
+    "customTableName": {
+      "type": "string",
+      "value": "[parameters('customTableName')]"
+    },
+    "dataCollectionRuleImmutableId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Insights/dataCollectionRules', parameters('dataCollectionRuleName')), '2023-03-11').immutableId]"
+    },
+    "dataCollectionEndpointUrl": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Insights/dataCollectionEndpoints', parameters('dataCollectionEndpointName')), '2023-03-11').logsIngestion.endpoint]"
+    },
+    "logStreamName": {
+      "type": "string",
+      "value": "[variables('streamName')]"
+    },
+    "abstractModalHint": {
+      "type": "string",
+      "value": "[format('Client Secret Value = read secret \"{0}\" from Key Vault \"{1}\"; all other fields are in the outputs above.', parameters('secretName'), variables('effectiveKeyVaultName'))]"
+    }
+  }
+}

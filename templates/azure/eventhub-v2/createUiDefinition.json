@@ -1,0 +1,494 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/0.1.2-preview/CreateUIDefinition.MultiVm.json#",
+  "handler": "Microsoft.Azure.CreateUIDef",
+  "version": "0.1.2-preview",
+  "parameters": {
+    "config": {
+      "isWizard": true,
+      "basics": {
+        "description": "**Abstract Security — Azure Event Hub onboarding.** Deploys everything the Abstract *Azure Event Hub* integration needs: an Event Hubs namespace, one Event Hub per log source, the `abstract` consumer group, a checkpoint Storage Account + blob container, and your choice of Connection String and/or Service Principal authentication.\n\nAfter deployment, the **Outputs** tab contains a field-for-field answer key for the Abstract integration modal.",
+        "resourceGroup": {
+          "constraints": {
+            "validations": []
+          }
+        }
+      }
+    },
+    "basics": [
+      {
+        "name": "namespaceName",
+        "type": "Microsoft.Common.TextBox",
+        "label": "Event Hubs namespace name",
+        "toolTip": "Globally unique, 6-50 characters, letters/numbers/hyphens, starts with a letter. Becomes <name>.servicebus.windows.net.",
+        "placeholder": "e.g. contoso-abstract-logs",
+        "constraints": {
+          "required": true,
+          "regex": "^[a-zA-Z][a-zA-Z0-9-]{4,48}[a-zA-Z0-9]$",
+          "validationMessage": "6-50 chars, letters/numbers/hyphens, must start with a letter and end with a letter or number."
+        }
+      },
+      {
+        "name": "sku",
+        "type": "Microsoft.Common.DropDown",
+        "label": "Pricing tier",
+        "defaultValue": "Standard",
+        "toolTip": "Abstract requires Standard as the minimum tier. Premium uses Processing Units and dedicated capacity.",
+        "constraints": {
+          "required": true,
+          "allowedValues": [
+            { "label": "Standard (Abstract minimum)", "value": "Standard" },
+            { "label": "Premium", "value": "Premium" }
+          ]
+        }
+      },
+      {
+        "name": "capacity",
+        "type": "Microsoft.Common.Slider",
+        "label": "Capacity (Throughput / Processing Units)",
+        "subLabel": "TU",
+        "defaultValue": 1,
+        "min": 1,
+        "max": 40,
+        "toolTip": "Sizing per Abstract docs: ~1 TU per 1 MB/s of expected ingress (1 MB/s = 1 TU, 10 MB/s = 10 TU, 32 MB/s = 32 TU). Premium accepts 1, 2, 4, 8 or 16 PUs only.",
+        "showStepMarkers": false
+      },
+      {
+        "name": "autoInflate",
+        "type": "Microsoft.Common.CheckBox",
+        "label": "Enable Auto-Inflate (Standard tier scales Throughput Units automatically)",
+        "defaultValue": true,
+        "visible": "[equals(basics('sku'), 'Standard')]"
+      },
+      {
+        "name": "maxThroughputUnits",
+        "type": "Microsoft.Common.Slider",
+        "label": "Auto-Inflate ceiling (Throughput Units)",
+        "subLabel": "TU",
+        "defaultValue": 20,
+        "min": 1,
+        "max": 40,
+        "showStepMarkers": false,
+        "visible": "[and(equals(basics('sku'), 'Standard'), basics('autoInflate'))]"
+      }
+    ],
+    "steps": [
+      {
+        "name": "hubs",
+        "label": "Event Hubs",
+        "elements": [
+          {
+            "name": "hubsInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Info",
+              "text": "One Event Hub is created per log source, named <prefix>-<environment>-<source> (e.g. abs-prod-entra). Each hub gets the consumer group below — enter that consumer group in the Abstract integration. Abstract docs recommend at least 4 partitions; retention should cover possible ingestion downtime."
+            }
+          },
+          {
+            "name": "hubPrefix",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Hub name prefix",
+            "defaultValue": "abs",
+            "constraints": {
+              "required": true,
+              "regex": "^[a-z0-9][a-z0-9-]{0,20}$",
+              "validationMessage": "Lowercase letters, numbers and hyphens (max 21 chars)."
+            }
+          },
+          {
+            "name": "environment",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Environment token",
+            "defaultValue": "prod",
+            "toolTip": "Used in hub names, e.g. prod, staging, dev.",
+            "constraints": {
+              "required": true,
+              "regex": "^[a-z0-9][a-z0-9-]{0,20}$",
+              "validationMessage": "Lowercase letters, numbers and hyphens (max 21 chars)."
+            }
+          },
+          {
+            "name": "hubSourcesCsv",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Log sources (comma-separated)",
+            "defaultValue": "activity,entra,defender",
+            "toolTip": "One Event Hub per entry. Typical: activity (Azure Activity Log), entra (Entra ID sign-in/audit), defender (Defender XDR streaming), resource (Azure Resource Logs).",
+            "constraints": {
+              "required": true,
+              "regex": "^[a-z0-9][a-z0-9, -]*$",
+              "validationMessage": "Comma-separated lowercase tokens, e.g. activity,entra,defender"
+            }
+          },
+          {
+            "name": "defaultPartitionCount",
+            "type": "Microsoft.Common.Slider",
+            "label": "Partitions per hub",
+            "subLabel": "partitions",
+            "defaultValue": 4,
+            "min": 1,
+            "max": 32,
+            "showStepMarkers": false,
+            "toolTip": "Abstract docs recommend at least 4. Partitions cannot be reduced after creation."
+          },
+          {
+            "name": "defaultRetentionDays",
+            "type": "Microsoft.Common.Slider",
+            "label": "Message retention (days)",
+            "subLabel": "days",
+            "defaultValue": 7,
+            "min": 1,
+            "max": 7,
+            "showStepMarkers": true,
+            "toolTip": "Size to ride out ingestion downtime or delay."
+          },
+          {
+            "name": "consumerGroupName",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Consumer group for Abstract",
+            "defaultValue": "abstract",
+            "toolTip": "Created on every hub. Enter this in the 'Event Hub Consumer Group' field of the Abstract integration.",
+            "constraints": {
+              "required": true,
+              "regex": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,49}$",
+              "validationMessage": "1-50 chars: letters, numbers, periods, hyphens, underscores."
+            }
+          }
+        ]
+      },
+      {
+        "name": "auth",
+        "label": "Authentication",
+        "elements": [
+          {
+            "name": "authInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Info",
+              "text": "Match this to the Authentication Method you will pick in the Abstract integration. Connection String creates a least-privilege SAS rule (keys are NEVER exposed in deployment outputs). Service Principal assigns Azure Event Hubs Data Receiver on the namespace and Storage Blob Data Contributor on the checkpoint storage account."
+            }
+          },
+          {
+            "name": "method",
+            "type": "Microsoft.Common.OptionsGroup",
+            "label": "Authentication method",
+            "defaultValue": "Connection String (SAS)",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                { "label": "Connection String (SAS)", "value": "cs" },
+                { "label": "Service Principal (RBAC)", "value": "sp" },
+                { "label": "Both", "value": "both" }
+              ]
+            }
+          },
+          {
+            "name": "sasRuleName",
+            "type": "Microsoft.Common.TextBox",
+            "label": "SAS rule name",
+            "defaultValue": "abstract-access",
+            "toolTip": "Least-privilege shared access policy created at namespace level. Use its connection string in Abstract instead of RootManageSharedAccessKey.",
+            "constraints": {
+              "required": true,
+              "regex": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,49}$",
+              "validationMessage": "1-50 chars: letters, numbers, periods, hyphens, underscores."
+            },
+            "visible": "[not(equals(steps('auth').method, 'sp'))]"
+          },
+          {
+            "name": "includeSend",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Include Send right on the SAS rule (only if log producers will share this rule; Abstract only needs Listen)",
+            "defaultValue": false,
+            "visible": "[not(equals(steps('auth').method, 'sp'))]"
+          },
+          {
+            "name": "perHubSasRules",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Also create a per-hub SAS rule (tighter blast radius than the namespace-level rule)",
+            "defaultValue": false,
+            "visible": "[not(equals(steps('auth').method, 'sp'))]"
+          },
+          {
+            "name": "principalId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Service principal object ID",
+            "toolTip": "Object ID of the Enterprise Application (service principal) Abstract authenticates as — NOT the Application (client) ID. Create the app registration first (e.g. abstract-eventhub-ingestion) or let the companion script create it for you.",
+            "placeholder": "00000000-0000-0000-0000-000000000000",
+            "defaultValue": "",
+            "constraints": {
+              "required": "[not(equals(steps('auth').method, 'cs'))]",
+              "regex": "^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$",
+              "validationMessage": "Must be a GUID (the service principal OBJECT id)."
+            },
+            "visible": "[not(equals(steps('auth').method, 'cs'))]"
+          },
+          {
+            "name": "roleDefinitionName",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Event Hubs role",
+            "defaultValue": "Azure Event Hubs Data Receiver (Abstract docs)",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                { "label": "Azure Event Hubs Data Receiver (Abstract docs)", "value": "Azure Event Hubs Data Receiver" },
+                { "label": "Azure Event Hubs Data Owner", "value": "Azure Event Hubs Data Owner" }
+              ]
+            },
+            "visible": "[not(equals(steps('auth').method, 'cs'))]"
+          },
+          {
+            "name": "storageRoleDefinitionName",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Checkpoint storage role",
+            "defaultValue": "Storage Blob Data Contributor (Abstract docs)",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                { "label": "Storage Blob Data Contributor (Abstract docs)", "value": "Storage Blob Data Contributor" },
+                { "label": "Storage Blob Data Owner", "value": "Storage Blob Data Owner" }
+              ]
+            },
+            "visible": "[not(equals(steps('auth').method, 'cs'))]"
+          }
+        ]
+      },
+      {
+        "name": "network",
+        "label": "Networking",
+        "elements": [
+          {
+            "name": "profile",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Security profile",
+            "defaultValue": "Safe Mode — public access stays on (recommended for onboarding)",
+            "toolTip": "Safe Mode guarantees the namespace and checkpoint storage stay reachable by Abstract while you onboard. Harden later by redeploying with IP Allowlist, Private Only or Hybrid.",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                { "label": "Safe Mode — public access stays on (recommended for onboarding)", "value": "SafeMode" },
+                { "label": "IP Allowlist — public, firewall default-deny with allowed CIDRs", "value": "IpAllowlist" },
+                { "label": "Private Only — no public access, Private Endpoints required", "value": "PrivateOnly" },
+                { "label": "Hybrid — Private Endpoint + public IP allowlist", "value": "Hybrid" }
+              ]
+            }
+          },
+          {
+            "name": "safeModeInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Warning",
+              "text": "Private Only blocks ALL public access. Abstract must then reach the namespace and the checkpoint storage account over your private connectivity (e.g. a forwarder inside the VNet). Verify this before choosing it, or logs will stop flowing."
+            },
+            "visible": "[equals(steps('network').profile, 'PrivateOnly')]"
+          },
+          {
+            "name": "ipCsv",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Allowed public IP ranges (comma-separated CIDRs)",
+            "toolTip": "Abstract egress IPs plus your admin ranges. The storage firewall rejects /31 and /32 — list single addresses as bare IPs.",
+            "placeholder": "203.0.113.0/24,198.51.100.7",
+            "defaultValue": "",
+            "constraints": {
+              "required": "[or(equals(steps('network').profile, 'IpAllowlist'), equals(steps('network').profile, 'Hybrid'))]",
+              "regex": "^[0-9./, ]*$",
+              "validationMessage": "Comma-separated IPv4 addresses or CIDR ranges."
+            },
+            "visible": "[or(equals(steps('network').profile, 'IpAllowlist'), equals(steps('network').profile, 'Hybrid'))]"
+          },
+          {
+            "name": "subnetId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Subnet resource ID for Private Endpoints",
+            "toolTip": "Full ARM resource ID of an existing subnet, e.g. /subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet>",
+            "defaultValue": "",
+            "constraints": {
+              "required": "[or(equals(steps('network').profile, 'PrivateOnly'), equals(steps('network').profile, 'Hybrid'))]",
+              "regex": "^$|^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$",
+              "validationMessage": "Must be a full subnet resource ID."
+            },
+            "visible": "[or(equals(steps('network').profile, 'PrivateOnly'), equals(steps('network').profile, 'Hybrid'))]"
+          },
+          {
+            "name": "privateDnsZoneId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Private DNS zone ID — privatelink.servicebus.windows.net (optional)",
+            "defaultValue": "",
+            "constraints": {
+              "required": false,
+              "regex": "^$|^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.servicebus\\.windows\\.net$",
+              "validationMessage": "Must be the resource ID of a privatelink.servicebus.windows.net Private DNS zone."
+            },
+            "visible": "[or(equals(steps('network').profile, 'PrivateOnly'), equals(steps('network').profile, 'Hybrid'))]"
+          },
+          {
+            "name": "storageBlobPrivateDnsZoneId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Private DNS zone ID — privatelink.blob.core.windows.net (optional)",
+            "defaultValue": "",
+            "constraints": {
+              "required": false,
+              "regex": "^$|^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.blob\\.core\\.windows\\.net$",
+              "validationMessage": "Must be the resource ID of a privatelink.blob.core.windows.net Private DNS zone."
+            },
+            "visible": "[or(equals(steps('network').profile, 'PrivateOnly'), equals(steps('network').profile, 'Hybrid'))]"
+          },
+          {
+            "name": "allowAzureServices",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Allow trusted Microsoft services through the firewall (required for diagnostic-settings export when the firewall denies by default)",
+            "defaultValue": true
+          }
+        ]
+      },
+      {
+        "name": "storage",
+        "label": "Checkpoint storage",
+        "elements": [
+          {
+            "name": "storageInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Info",
+              "text": "The Abstract Event Hub consumer requires a Storage Account with a private blob container for checkpointing and lease management. The container name goes in the 'Storage Blob Container Name' field of the Abstract integration."
+            }
+          },
+          {
+            "name": "createStorageAccount",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Create the checkpoint Storage Account + container (uncheck only to bring your own)",
+            "defaultValue": true
+          },
+          {
+            "name": "storageAccountName",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Storage account name (leave empty to auto-generate)",
+            "defaultValue": "",
+            "toolTip": "3-24 lowercase letters/numbers, globally unique. Empty = auto-generated unique name (abs<hash>).",
+            "constraints": {
+              "required": false,
+              "regex": "^$|^[a-z0-9]{3,24}$",
+              "validationMessage": "3-24 lowercase letters and numbers, or empty to auto-generate."
+            },
+            "visible": "[steps('storage').createStorageAccount]"
+          },
+          {
+            "name": "storageSkuName",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Replication",
+            "defaultValue": "Locally-redundant (LRS) — sufficient for checkpoints",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                { "label": "Locally-redundant (LRS) — sufficient for checkpoints", "value": "Standard_LRS" },
+                { "label": "Zone-redundant (ZRS)", "value": "Standard_ZRS" },
+                { "label": "Geo-redundant (GRS)", "value": "Standard_GRS" }
+              ]
+            },
+            "visible": "[steps('storage').createStorageAccount]"
+          },
+          {
+            "name": "blobContainerName",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Checkpoint container name",
+            "defaultValue": "abstract-checkpoints",
+            "toolTip": "Enter this in the 'Storage Blob Container Name' field of the Abstract integration.",
+            "constraints": {
+              "required": true,
+              "regex": "^[a-z0-9]([a-z0-9-]{1,61})[a-z0-9]$",
+              "validationMessage": "3-63 lowercase letters, numbers and dashes; starts/ends alphanumeric."
+            },
+            "visible": "[steps('storage').createStorageAccount]"
+          },
+          {
+            "name": "storageAllowSharedKeyAccess",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Allow shared-key access (REQUIRED for Connection String authentication; uncheck only for pure Service Principal deployments)",
+            "defaultValue": true,
+            "visible": "[steps('storage').createStorageAccount]"
+          },
+          {
+            "name": "storageApplyIpRules",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Mirror the Event Hub IP allowlist onto the storage firewall",
+            "defaultValue": true,
+            "visible": "[and(steps('storage').createStorageAccount, or(equals(steps('network').profile, 'IpAllowlist'), equals(steps('network').profile, 'Hybrid')))]"
+          },
+          {
+            "name": "createStoragePrivateEndpoint",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Create a blob Private Endpoint for the checkpoint storage account",
+            "defaultValue": true,
+            "visible": "[and(steps('storage').createStorageAccount, or(equals(steps('network').profile, 'PrivateOnly'), equals(steps('network').profile, 'Hybrid')))]"
+          }
+        ]
+      },
+      {
+        "name": "monitoring",
+        "label": "Monitoring",
+        "elements": [
+          {
+            "name": "enableDiagnostics",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Enable diagnostic settings on the namespace (monitor the health of the log pipeline itself)",
+            "defaultValue": false
+          },
+          {
+            "name": "law",
+            "type": "Microsoft.Solutions.ResourceSelector",
+            "label": "Log Analytics workspace",
+            "resourceType": "Microsoft.OperationalInsights/workspaces",
+            "toolTip": "Destination for namespace diagnostics.",
+            "options": {
+              "filter": {
+                "subscription": "all",
+                "location": "all"
+              }
+            },
+            "visible": "[steps('monitoring').enableDiagnostics]"
+          }
+        ]
+      }
+    ],
+    "outputs": {
+      "location": "[location()]",
+      "namespaceName": "[basics('namespaceName')]",
+      "sku": "[basics('sku')]",
+      "capacity": "[basics('capacity')]",
+      "autoInflate": "[if(equals(basics('sku'), 'Standard'), coalesce(basics('autoInflate'), false), false)]",
+      "maxThroughputUnits": "[coalesce(basics('maxThroughputUnits'), 20)]",
+      "autoHubNaming": true,
+      "hubPrefix": "[steps('hubs').hubPrefix]",
+      "environment": "[steps('hubs').environment]",
+      "hubSources": "[split(steps('hubs').hubSourcesCsv, ',')]",
+      "defaultPartitionCount": "[steps('hubs').defaultPartitionCount]",
+      "defaultRetentionDays": "[steps('hubs').defaultRetentionDays]",
+      "consumerGroupName": "[steps('hubs').consumerGroupName]",
+      "enableSas": "[not(equals(steps('auth').method, 'sp'))]",
+      "sasRuleName": "[coalesce(steps('auth').sasRuleName, 'abstract-access')]",
+      "sasRights": "[if(coalesce(steps('auth').includeSend, false), parse('[\"Listen\",\"Send\"]'), parse('[\"Listen\"]'))]",
+      "perHubSasRules": "[coalesce(steps('auth').perHubSasRules, false)]",
+      "enableRbac": "[not(equals(steps('auth').method, 'cs'))]",
+      "principalId": "[coalesce(steps('auth').principalId, '')]",
+      "roleDefinitionName": "[coalesce(steps('auth').roleDefinitionName, 'Azure Event Hubs Data Receiver')]",
+      "storageRoleDefinitionName": "[coalesce(steps('auth').storageRoleDefinitionName, 'Storage Blob Data Contributor')]",
+      "principalType": "ServicePrincipal",
+      "createStorageAccount": "[steps('storage').createStorageAccount]",
+      "storageAccountName": "[coalesce(steps('storage').storageAccountName, '')]",
+      "storageSkuName": "[coalesce(steps('storage').storageSkuName, 'Standard_LRS')]",
+      "blobContainerName": "[coalesce(steps('storage').blobContainerName, 'abstract-checkpoints')]",
+      "storageAllowSharedKeyAccess": "[coalesce(steps('storage').storageAllowSharedKeyAccess, true)]",
+      "storageApplyIpRules": "[coalesce(steps('storage').storageApplyIpRules, true)]",
+      "createStoragePrivateEndpoint": "[coalesce(steps('storage').createStoragePrivateEndpoint, false)]",
+      "storageBlobPrivateDnsZoneId": "[coalesce(steps('network').storageBlobPrivateDnsZoneId, '')]",
+      "enablePrivateEndpoint": "[or(equals(steps('network').profile, 'PrivateOnly'), equals(steps('network').profile, 'Hybrid'))]",
+      "subnetId": "[coalesce(steps('network').subnetId, '')]",
+      "privateDnsZoneId": "[coalesce(steps('network').privateDnsZoneId, '')]",
+      "allowedIpRanges": "[split(coalesce(steps('network').ipCsv, ''), ',')]",
+      "allowAzureServices": "[steps('network').allowAzureServices]",
+      "disablePublicNetwork": "[equals(steps('network').profile, 'PrivateOnly')]",
+      "safeMode": "[equals(steps('network').profile, 'SafeMode')]",
+      "enableDiagnostics": "[steps('monitoring').enableDiagnostics]",
+      "logAnalyticsWorkspaceId": "[coalesce(steps('monitoring').law.id, '')]"
+    }
+  }
+}

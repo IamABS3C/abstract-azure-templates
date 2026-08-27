@@ -1,0 +1,2175 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "3.5.0.0",
+  "metadata": {
+    "author": "Abstract Security - Solutions Engineering",
+    "comments": "Microsoft Sentinel Content Hub solution for Abstract Security. Deploys the connector tile, ASIM parser, two analytics rules, two hunting queries, a workbook, and three SOAR playbooks (as nested deployments), and registers the solution package. Validate with the Sentinel solution packaging tool before Content Hub submission."
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]"
+    },
+    "workspace": {
+      "type": "string",
+      "metadata": {
+        "description": "Log Analytics / Sentinel workspace name."
+      }
+    },
+    "workspace-location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]"
+    },
+    "customTableName": {
+      "type": "string",
+      "defaultValue": "AbstractEventLogs_CL",
+      "metadata": {
+        "description": "Custom table the Abstract Sentinel Destination writes to."
+      }
+    },
+    "logoUrl": {
+      "type": "string",
+      "defaultValue": "data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyMDAgMjAwIiB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgcm9sZT0iaW1nIiBhcmlhLWxhYmVsPSJBYnN0cmFjdCBTZWN1cml0eSBtYXJrIj4KICA8ZGVmcz4KICAgIDxyYWRpYWxHcmFkaWVudCBpZD0ibWdsb3ciIGN4PSI1MCUiIGN5PSI1MCUiIHI9IjU1JSI+CiAgICAgIDxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iI0ZGMjE2QiIgc3RvcC1vcGFjaXR5PSIwLjU1Ii8+CiAgICAgIDxzdG9wIG9mZnNldD0iMC42IiBzdG9wLWNvbG9yPSIjRTgwMDVEIiBzdG9wLW9wYWNpdHk9IjAuMTUiLz4KICAgICAgPHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjMDYwNjA4IiBzdG9wLW9wYWNpdHk9IjAiLz4KICAgIDwvcmFkaWFsR3JhZGllbnQ+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9ImFibS1ncmFkMiIgeDE9IjY2LjA0MTciIHkxPSI5LjA2NzQiIHgyPSIxMTIuOTkyIiB5Mj0iNTguNDU5MSIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPgogICAgICA8c3RvcCBzdG9wLWNvbG9yPSIjRkYyMTZCIi8+PHN0b3Agb2Zmc2V0PSIwLjY3MTcwMiIgc3RvcC1jb2xvcj0iI0U4MDA1RCIvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICA8L2RlZnM+CiAgPHJlY3QgeD0iMCIgeT0iMCIgd2lkdGg9IjIwMCIgaGVpZ2h0PSIyMDAiIHJ4PSIzMCIgZmlsbD0iIzA2MDYwOCIvPgogIDxyZWN0IHg9IjAiIHk9IjAiIHdpZHRoPSIyMDAiIGhlaWdodD0iMjAwIiByeD0iMzAiIGZpbGw9InVybCgjbWdsb3cpIi8+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoMjguMiAzNi4yNSkgc2NhbGUoMC44NSkiPgogICAgPHBhdGggZmlsbD0iI0U4MDA1RCIgZD0iTTE1My4yNjggMTQ2LjYyNUwxMzMuMjI4IDEwOS42MjJDMTQyLjI1IDEwNy45NzggMTUyLjY0MSAxMDcuODY0IDE2MC45NzEgMTEyLjEyOUMxNjMuMTY0IDExMy4yNTIgMTY1LjIyNiAxMTQuNzE3IDE2Ni41OTUgMTE2LjczNkMxNzEuMDY1IDEyMy4yOTcgMTY4LjUyNSAxMzQuMzY3IDE2NC4wNTUgMTQwLjI2QzE2MS42OCAxNDMuMzg1IDE1OC4zOTcgMTQ2LjIwMSAxNTQuMjkxIDE0OC42MjdDMTU0LjA2IDE0OC4xODggMTUzLjc0NiAxNDcuNTY5IDE1My4yODQgMTQ2LjYyNUgxNTMuMjY4WiIvPgogICAgPHBhdGggZmlsbD0iI0MyMDA0QyIgZD0iTTE2LjQwOTYgMTE4LjQxMUMxNS41MzU0IDExOC4zMTMgMTQuNjk0MiAxMTguMDg1IDEzLjkwMjUgMTE3LjY5NEMxMi4wODgyIDExNi43ODIgMTAuNzg1MiAxMTUuMDc0IDEwLjAxIDExMy4yMThDNy4xMDY5OCAxMDYuMjMzIDkuMTUyMjggOTcuMjk2IDExLjc3NDggOTAuNTU2NkMxNC4yNjU0IDg0LjE3NTQgMTguNTA0MyA3OC4zNDcxIDIyLjAxNzYgNzIuNDg2NUMyNS40MzE5IDY1Ljc0NzEgMjkuOTAxNyA1OS4zNjU2IDMzLjc5NDMgNTIuODg2NUMzNS45MDU1IDQ5LjM1MzkgMzkuMDU1OCA0Ni42MzUyIDQyLjg4MjUgNDUuMDIzNkM0Ny4xNzA5IDQzLjIxNjYgNTMuNzAyNSA0MS4wODQgNjAuNTE0NSA0MS4wODRDNjAuNTE0NSA0MS4wODQgNjEuMDc1MyA0MS4wODQgNjEuMjIzNyA0MS4wODRINjEuNTg2Nkg2MS43MTg2SDYyLjA0ODVDNjYuOTMwOCA0MS4yNzk0IDcxLjYxNTEgNDIuNDM1MiA3Ni4wMTg5IDQ0LjUxODlDNzUuNDU4IDQ0LjI1ODUgNjkuMzIyMSA1Mi4yNjc4IDY4Ljc3ODEgNTIuOTUxNkM2NS40NDU5IDU3LjA3MDMgNjIuMjk1OSA2MS4zMTkxIDU5LjI3NzUgNjUuNjY1OUM1My43ODUgNzMuNTQ0NiA0OC44MjAzIDgxLjc2NjEgNDQuMjAyIDkwLjE4MjJDNDEuOTkxOCA5NC4yMDMxIDM5LjY0OTcgOTguMjU2OCAzNy42ODY5IDEwMi4zOTJDMzUuNzI0MSAxMDYuNTI3IDM0LjQzNzUgMTEwLjQwMSAzMS4wMDY4IDExMy4zOEMyOC41NjU3IDExNS40OTcgMjUuNDk3OCAxMTYuNzM0IDIyLjM4MDUgMTE3LjY0NUMyMC40NTA3IDExOC4xOTkgMTguMzcyNCAxMTguNjM4IDE2LjQwOTYgMTE4LjQxMVoiLz4KICAgIDxwYXRoIGZpbGw9InVybCgjYWJtLWdyYWQyKSIgZD0iTTEwOC40NTggNjQuNjYxQzEwMy45MjIgNTcuNDk4MSA5Ni4yODUyIDQ3LjY0OTEgODUuNDQ4NyA0MC45MDk1TDgzLjA1NzQgMzkuNDc2OUM3Ni41NTg0IDM1LjYzNSA2OS40ODI4IDMzLjU4MzggNjIuMDI3NSAzMy4zNTU5QzYxLjU2NTcgMzMuMzM5NiA2MS4wNzA4IDMzLjMzOTYgNjAuNTkyNSAzMy4zMzk2QzU0LjI0MjMgMzMuMzM5NiA0OC41MDI0IDM0LjYyNTcgNDMuNzg1MiAzNi4yMjExTDQ3LjI2NTQgMzAuNDQxOUw0OC43MTY4IDI4LjA4MTRMNTAuODQ0NiAyNC41MzI1TDUxLjgzNDIgMjIuODg4NEM1NC42MDUyIDE4LjI2NSA1Ny43MDYxIDE0LjIyNzggNjEuMDIxNCAxMC44NTc5TDYxLjM2NzcgMTAuNTE2MUM2Mi4wNjA1IDkuODQ4NjQgNjIuNzM2NSA5LjE5NzQ0IDYzLjQyOTUgOC41OTUxNUM2NC4yMDQ1IDcuOTExNDEgNjUuMDI5NSA3LjI0Mzk3IDY1Ljg4NzEgNi42MDkwOEM2Ni43Nzc5IDUuOTQxNiA2Ny42NTE4IDUuMzM5MjcgNjguNTI2MyA0Ljc4NTc3QzY4Ljg3MjUgNC41NTc4NiA2OS4xNTI5IDQuMzc4NzkgNjkuNDMzNCA0LjI0ODU2TDY5Ljg3ODQgNC4wMjA2NUw2OS45NjExIDMuOTM5MjVDNzAuMTI2MyAzLjg0MTU4IDcwLjI5MSAzLjc0MzkgNzAuNDU2MiAzLjY0NjIyTDcwLjkxNzYgMy40MTgzMkM3MS42NDM3IDMuMDQzODkgNzIuNDE4NyAyLjY2OTQ3IDczLjM3NTIgMi4yNDYyMUw3My41MjM2IDIuMTgxMDlDNzQuNzExMSAxLjcwODk5IDc1Ljc5OTcgMS4zMzQ1NyA3Ni44Mzg4IDEuMDI1MjZMNzcuMDUzNSAwLjk3NjQyM0M3Ny42MzA3IDAuODI5OTEzIDc4LjE1ODQgMC42ODMzOTYgNzguNzM2MiAwLjU4NTcyMkw4MC42OTg3IDAuMjQzODU3QzgxLjgwMzYgMC4wOTczNDM4IDgyLjkwOTEgMC4wMzIyMjY2IDg0LjAxMzkgMC4wMzIyMjY2Qzg1LjAxOTkgMC4wMzIyMjY2IDg2LjA5MjIgMC4wOTczNDM5IDg3LjIxNCAwLjIyNzU3OEM4Ny42MDk2IDAuMjc2NDE2IDg4LjAyMjEgMC4zNDE1MzMgODguNDE3OCAwLjQwNjY1TDg4LjQ1MSAwLjQzOTIwOUw4OS40NDA2IDAuNjAyMDAxQzg5LjYzODUgMC42MzQ1NTkgODkuODM2MyAwLjY4MzM5NiA5MC4wNjczIDAuNzMyMjMzQzkwLjU0NTUgMC44NDYxOSA5MC45NzQzIDAuOTYwMTQ2IDkxLjM3MDYgMS4wOTAzOEw5MS43NjYyIDEuMjA0MzRDOTIuMDYyOSAxLjMwMjAxIDkyLjM3NjUgMS4zODM0MSA5Mi42NzMzIDEuNDk3MzZMOTMuMzE2OCAxLjcyNTI3TDkzLjk1OTcgMS45Njk0NkM5NC4zNTU5IDIuMTMyMjUgOTQuNzg0NyAyLjMxMTMyIDk1LjIxMzUgMi41MDY2OEM5Ni4xMDQzIDIuODk3MzggOTcuMDExNCAzLjM1MzIgOTcuOTM0NyAzLjg5MDQxQzk4LjgyNTUgNC4zOTUwNyA5OS43MTYzIDQuOTQ4NTcgMTAwLjY3MyA1LjU5OTc0QzEwMy4zOTUgNy41MDQ0MyAxMDYuMDUgOS45MTM3MyAxMDguNTQgMTIuNzEzOEMxMDkuODI3IDE0LjE2MjYgMTExLjA5NyAxNS43OTA2IDExMi4zMzQgMTcuNTMyNEMxMTMuNzM2IDE5LjUwMjMgMTE0Ljk1NyAyMS43OTc2IDExNS45OCAyNC4zODZDMTE2LjQwOCAyNS40NDQyIDExNi43MjEgMjYuNTUxMSAxMTYuOTIgMjcuNjc0NEMxMTcuMzMyIDI5LjkzNzIgMTE3LjYxMiAzMS43NjA1IDExNy43MTEgMzIuOTMyNkMxMTcuNzQ0IDMzLjI5MDggMTE3Ljc3NyAzMy42NDg5IDExNy43NzcgMzMuOTkwOFYzNC4xODYxQzExNy44MSAzNC40MzA0IDExNy44MjcgMzQuNjU4MyAxMTcuODI3IDM0LjkxODdWMzUuMDgxNUMxMTcuODU5IDM1LjY4MzggMTE3Ljg3NiAzNi4zMDI0IDExNy44NzYgMzYuOTUzNkMxMTcuODc2IDQyLjc4MTYgMTE2LjgwNCA0OC40MTQzIDExNC42OTIgNTMuNzA1TDExNC42MjcgNTMuODY3OEMxMTQuNTc3IDUzLjk5OCAxMTQuNTI4IDU0LjExMiAxMTQuNDc4IDU0LjIyNTlMMTE0LjM5NiA1NC40MDVMMTE0LjMzIDU0LjU4NDFMMTE0LjI2NCA1NC43MzA2TDExNC4yMTQgNTQuODc3MUMxMTQuMjE0IDU0Ljg3NzEgMTE0LjE0OCA1NS4wMzk5IDExNC4xMTUgNTUuMTIxM0MxMTIuNjQ3IDU4LjQ3NDggMTEwLjc1MSA2MS42ODE4IDEwOC40NDEgNjQuNzI2MUwxMDguNDU4IDY0LjY2MVoiLz4KICAgIDxwYXRoIGZpbGw9IiNGRjIxNkIiIGQ9Ik0yOC4yOTMgMTQ5Ljk3N0MyNi41NjExIDE0OS45NzcgMjQuODI5MiAxNDkuODMgMjMuMTMwMyAxNDkuNTA1QzE5LjAwNjggMTQ4LjcyMyAxNS4xMTQyIDE0Ni45NDkgMTEuNzMzIDE0NC41MjNDOC4zNTE3MSAxNDIuMDk4IDUuMzY2MyAxMzguODkxIDMuMjg4MDUgMTM1LjIyOEMyLjgwOTczIDEzNC4zOTggMi4zOTczOCAxMzMuNTM1IDIuMDE4MDIgMTMyLjY1NUMxLjQyNDIzIDEzMS4yMzkgMC45NjI0MDMgMTI5Ljc5MSAwLjYzMjUyNSAxMjguMjkzQzAuNTUwMDUzIDEyNy44NyAwLjQ2NzU4MyAxMjcuNDQ2IDAuMzg1MTEzIDEyNy4wMDdMMC4zMDI2NDMgMTI2LjU2N0MwLjIzNjY2OCAxMjYuMTc2IDAuMTg3MTg2IDEyNS43MjEgMC4xMzc3MDQgMTI1LjI0OEMwLjA4ODIyMTUgMTI0Ljc0NCAwLjA1NTIzMzcgMTI0LjIwNyAwLjAzODczOTcgMTIzLjcxOVYxMjMuMzI4QzAuMDA1NzUxNzggMTIyLjg1NiAtMC4wMTA3NDIyIDEyMi40NjUgLTAuMDEwNzQyMiAxMjIuMDlDLTAuMDEwNzQyMiAxMjEuNTIxIDAuMDg4MjIxNSAxMTkuMTExIDAuMTM3NzA0IDExOC43NTNDMC4xMzc3MDQgMTE4Ljc1MyAwLjIyMDE3MyAxMTcuOTA3IDAuMjY5NjU2IDExNy42MTRMMC40MTgxMDEgMTE2LjUyM0MwLjQxODEwMSAxMTYuNTIzIDAuNTgzMDQxIDExNS41MyAwLjU4MzA0MSAxMTUuNDk3QzAuNTgzMDQxIDExNS40OTcgMS4yMjYzMSAxMTIuMzIzIDEuMzA4NzggMTEyLjAzQzEuODIwMDkgMTE1LjE4OCAyLjc5MzIzIDExNy44NTggNC4yMTE3MSAxMTkuOTlDNi4zNTU5MyAxMjMuMDY3IDkuNDg5NzYgMTI1LjA4NiAxMy4xODQ0IDEyNS44NjdDMTYuMzg0MyAxMjYuNTM1IDE5LjczMjUgMTI2LjI5IDIyLjkxNTkgMTI1LjYwN0MyOC45MTk3IDEyNC4zMDQgMzQuMTgxMyAxMjEuNDA3IDM5LjYyNDMgMTE4LjczN0M0Mi40Nzc4IDExNy4zMzcgNDUuMjY1MiAxMTUuODIzIDQ4LjAzNjIgMTE0LjI5M0M1Ni4wNjg4IDEwOS45MTQgNjMuOTg1OCAxMDUuMzA3IDcxLjg1MzMgMTAwLjY1MUM3OC42NjUzIDk2LjYyOTUgODUuNjU4OCA5Mi43NzE2IDkyLjI1NjggODguNDI0N0w5My4xNDY5IDg3Ljg3MTJMOTMuNzkwNSA4Ny40OTY4TDkzLjgyMzYgODcuNDY0NkM5NC4xMDQxIDg3LjMwMTYgOTQuMzg0NSA4Ny4xMjI0IDk0LjY2NSA4Ni45NDMzTDk1LjcyMDQgODYuMzA4Nkw5NS44MDMgODYuMjExM0MxMDEuNTc2IDgyLjUzMTkgMTA2LjU3MyA3OC40NDYgMTEwLjY5NyA3NC4wMTc5QzExNS4zMTUgNjkuMDUyNCAxMTguOTI3IDYzLjU4MyAxMjEuNDE4IDU3LjczODVDMTIzLjgxIDUyLjE4NzMgMTI1LjE5NSA0Ni4yNzc5IDEyNS41NTggNDAuMTQwNkwxMzQuMTE4IDU1LjI4MDRMMTM2LjEzMSA1OC43NDc5TDE1Mi4xOTUgODcuMDA4NEwxNTMuMDM3IDg4LjUwNjVDMTU0LjQzOSA5MC45OTcgMTU3Ljk4NSA5Ny40MTExIDE2MS4xODUgMTAzLjgyNUMxNTkuOTk3IDEwMy4zNyAxNTguNzQ0IDEwMi45NzggMTU3LjM5MSAxMDIuNjIxQzE1Ni45MyAxMDIuNDc0IDE1Ni40NjggMTAyLjM2IDE1NS45OSAxMDIuMjQ2QzE1NS4yNjMgMTAyLjA4MyAxNTQuNTU0IDEwMS45MiAxNTMuNzk1IDEwMS43OUwxNTIuNzQgMTAxLjU5NUMxNTEuODY2IDEwMS40NDkgMTUwLjkyNiAxMDEuMzE4IDE0OS45ODYgMTAxLjIwNEwxNDkuNzcxIDEwMS4xNzJIMTQ5LjU1N0MxNDkuMjkzIDEwMS4xMjMgMTQ5LjAxMiAxMDEuMDkgMTQ4LjcxNSAxMDEuMDc0QzE0OC4zMDMgMTAxLjAyNSAxNDcuODkxIDEwMS4wMDkgMTQ3LjQ3OSAxMDAuOTc2QzE0Ni4xOTIgMTAwLjg5NSAxNDUuMDIxIDEwMC44NjIgMTQzLjggMTAwLjg2MkMxMzguMzA4IDEwMC44NjIgMTMyLjQyIDEwMS42NDQgMTI2LjMxNyAxMDMuMTc0QzExNy44ODggMTA1LjMyMyAxMDguOTE2IDEwOC45MzcgOTkuNTk2NSAxMTMuOTY3TDk5LjEzNDUgMTE0LjExNEw5OC45MzY3IDExNC4yOTNMOTguODcwNCAxMTQuMzI1TDk4LjgyMDkgMTE0LjM3NEM5NC41OTg2IDExNi44ODEgOTAuMzYgMTE5LjM4OCA4Ni4xMzcxIDEyMS44OTVDODIuMTYyMSAxMjQuMjU1IDc4LjE4NyAxMjYuNiA3NC4yMTIgMTI4Ljk0NEM3MC42IDEzMS4wNzcgNjYuOTcxMiAxMzMuMjI2IDYzLjM0MjkgMTM1LjM1OEM2MC4xNzU4IDEzNy4yMyA1Ny4wMDkgMTM5LjA4NiA1My44NDIxIDE0MC45NDJDNTAuMzc4MyAxNDIuOTc3IDQ2Ljk0NzYgMTQ1LjA2MSA0My4yMzY1IDE0Ni42NEM0MS4zMDY3IDE0Ny40NyAzOS4zNDM5IDE0OC4xNyAzNy4zMTUyIDE0OC43MjNDMzQuMzYyNyAxNDkuNTIxIDMxLjI5NDggMTQ5Ljk5MyAyOC4yMjcgMTQ5Ljk3N0gyOC4yOTNaIi8+CiAgPC9nPgo8L3N2Zz4K",
+      "metadata": {
+        "description": "Connector tile logo. Defaults to the embedded Abstract Security mark (self-contained data URI)."
+      }
+    },
+    "abstractBaseUrl": {
+      "type": "string",
+      "defaultValue": "https://api.abstractsecurity.app",
+      "metadata": {
+        "description": "Abstract API base URL (used by the playbooks)."
+      }
+    },
+    "abstractVendorAccountId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Abstract vendor account id for the playbooks (x-as-vendor-account-id). Leave blank to configure later."
+      }
+    },
+    "keyVaultSecretUri": {
+      "type": "string",
+      "defaultValue": "https://kv-abs-507fb9e4.vault.azure.net/secrets/abstract-api-key?api-version=7.4",
+      "metadata": {
+        "description": "Key Vault secret URI for the Abstract API key. Playbooks fetch it at runtime via their managed identity (grant each 'Key Vault Secrets User'). Never stores the key in the template."
+      }
+    },
+    "lookbackHours": {
+      "type": "int",
+      "defaultValue": 24,
+      "metadata": {
+        "description": "Enrich-incident playbook lookback window (hours)."
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/contentPackages",
+      "apiVersion": "2023-04-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/ffb59bbb-ab7c-5964-8c86-22d7b5df331b')]",
+      "location": "[parameters('workspace-location')]",
+      "properties": {
+        "version": "3.5.0",
+        "kind": "Solution",
+        "contentSchemaVersion": "3.0.0",
+        "displayName": "Abstract Security",
+        "contentId": "ffb59bbb-ab7c-5964-8c86-22d7b5df331b",
+        "packageId": "ffb59bbb-ab7c-5964-8c86-22d7b5df331b",
+        "contentProductId": "abstractsecurity-abstract-security-sentinel-sl-33b5df331b",
+        "contentKind": "Solution",
+        "descriptionHtml": "<p><strong>Abstract Security</strong> \u2014 the world's first Composable SIEM. Normalized, enriched, cost-reduced telemetry into Microsoft Sentinel, with <strong>two data connectors</strong> (pipeline destination + Insights &amp; Detections API), an ASIM parser, two analytics rules, three hunting queries (incl. a daily value &amp; reduction summary), three workbooks (Pipeline Overview, Value &amp; ROI, and a Competitive &amp; TCO Command Center), three SOAR playbooks, an incident automation rule, and a Security Copilot plugin/agent that call the Abstract API to close the loop and prove value.</p>",
+        "icon": "<img src=\"data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAyMDAgMjAwIiB3aWR0aD0iMjAwIiBoZWlnaHQ9IjIwMCIgcm9sZT0iaW1nIiBhcmlhLWxhYmVsPSJBYnN0cmFjdCBTZWN1cml0eSI+CiAgPGRlZnM+CiAgICA8cmFkaWFsR3JhZGllbnQgaWQ9Imdsb3ciIGN4PSI1MCUiIGN5PSI0MiUiIHI9IjU1JSI+CiAgICAgIDxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iI0ZGMjE2QiIgc3RvcC1vcGFjaXR5PSIwLjQ1Ii8+CiAgICAgIDxzdG9wIG9mZnNldD0iMC41NSIgc3RvcC1jb2xvcj0iI0U4MDA1RCIgc3RvcC1vcGFjaXR5PSIwLjEyIi8+CiAgICAgIDxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzA2MDYwOCIgc3RvcC1vcGFjaXR5PSIwIi8+CiAgICA8L3JhZGlhbEdyYWRpZW50PgogICAgPGxpbmVhckdyYWRpZW50IGlkPSJhYm0tZ3JhZCIgeDE9IjY2LjA0MTciIHkxPSI5LjA2NzQiIHgyPSIxMTIuOTkyIiB5Mj0iNTguNDU5MSIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPgogICAgICA8c3RvcCBzdG9wLWNvbG9yPSIjRkYyMTZCIi8+PHN0b3Agb2Zmc2V0PSIwLjY3MTcwMiIgc3RvcC1jb2xvcj0iI0U4MDA1RCIvPgogICAgPC9saW5lYXJHcmFkaWVudD4KICAgIDxsaW5lYXJHcmFkaWVudCBpZD0id20iIHgxPSIwIiB5MT0iMCIgeDI9IjEiIHkyPSIwIj4KICAgICAgPHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjRkZGRkZGIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjRkZFM0VFIi8+CiAgICA8L2xpbmVhckdyYWRpZW50PgogIDwvZGVmcz4KICA8cmVjdCB4PSIyIiB5PSIyIiB3aWR0aD0iMTk2IiBoZWlnaHQ9IjE5NiIgcng9IjQwIiBmaWxsPSIjMDYwNjA4IiBzdHJva2U9IiNGRjIxNkIiIHN0cm9rZS13aWR0aD0iMiIgc3Ryb2tlLW9wYWNpdHk9IjAuNTUiLz4KICA8cmVjdCB4PSIyIiB5PSIyIiB3aWR0aD0iMTk2IiBoZWlnaHQ9IjE5NiIgcng9IjQwIiBmaWxsPSJ1cmwoI2dsb3cpIi8+CiAgPGcgdHJhbnNmb3JtPSJ0cmFuc2xhdGUoNDMuNSAyMCkgc2NhbGUoMC43OSkiPgogICAgPHBhdGggZmlsbD0iI0U4MDA1RCIgZD0iTTE1My4yNjggMTQ2LjYyNUwxMzMuMjI4IDEwOS42MjJDMTQyLjI1IDEwNy45NzggMTUyLjY0MSAxMDcuODY0IDE2MC45NzEgMTEyLjEyOUMxNjMuMTY0IDExMy4yNTIgMTY1LjIyNiAxMTQuNzE3IDE2Ni41OTUgMTE2LjczNkMxNzEuMDY1IDEyMy4yOTcgMTY4LjUyNSAxMzQuMzY3IDE2NC4wNTUgMTQwLjI2QzE2MS42OCAxNDMuMzg1IDE1OC4zOTcgMTQ2LjIwMSAxNTQuMjkxIDE0OC42MjdDMTU0LjA2IDE0OC4xODggMTUzLjc0NiAxNDcuNTY5IDE1My4yODQgMTQ2LjYyNUgxNTMuMjY4WiIvPgogICAgPHBhdGggZmlsbD0iI0MyMDA0QyIgZD0iTTE2LjQwOTYgMTE4LjQxMUMxNS41MzU0IDExOC4zMTMgMTQuNjk0MiAxMTguMDg1IDEzLjkwMjUgMTE3LjY5NEMxMi4wODgyIDExNi43ODIgMTAuNzg1MiAxMTUuMDc0IDEwLjAxIDExMy4yMThDNy4xMDY5OCAxMDYuMjMzIDkuMTUyMjggOTcuMjk2IDExLjc3NDggOTAuNTU2NkMxNC4yNjU0IDg0LjE3NTQgMTguNTA0MyA3OC4zNDcxIDIyLjAxNzYgNzIuNDg2NUMyNS40MzE5IDY1Ljc0NzEgMjkuOTAxNyA1OS4zNjU2IDMzLjc5NDMgNTIuODg2NUMzNS45MDU1IDQ5LjM1MzkgMzkuMDU1OCA0Ni42MzUyIDQyLjg4MjUgNDUuMDIzNkM0Ny4xNzA5IDQzLjIxNjYgNTMuNzAyNSA0MS4wODQgNjAuNTE0NSA0MS4wODRDNjAuNTE0NSA0MS4wODQgNjEuMDc1MyA0MS4wODQgNjEuMjIzNyA0MS4wODRINjEuNTg2Nkg2MS43MTg2SDYyLjA0ODVDNjYuOTMwOCA0MS4yNzk0IDcxLjYxNTEgNDIuNDM1MiA3Ni4wMTg5IDQ0LjUxODlDNzUuNDU4IDQ0LjI1ODUgNjkuMzIyMSA1Mi4yNjc4IDY4Ljc3ODEgNTIuOTUxNkM2NS40NDU5IDU3LjA3MDMgNjIuMjk1OSA2MS4zMTkxIDU5LjI3NzUgNjUuNjY1OUM1My43ODUgNzMuNTQ0NiA0OC44MjAzIDgxLjc2NjEgNDQuMjAyIDkwLjE4MjJDNDEuOTkxOCA5NC4yMDMxIDM5LjY0OTcgOTguMjU2OCAzNy42ODY5IDEwMi4zOTJDMzUuNzI0MSAxMDYuNTI3IDM0LjQzNzUgMTEwLjQwMSAzMS4wMDY4IDExMy4zOEMyOC41NjU3IDExNS40OTcgMjUuNDk3OCAxMTYuNzM0IDIyLjM4MDUgMTE3LjY0NUMyMC40NTA3IDExOC4xOTkgMTguMzcyNCAxMTguNjM4IDE2LjQwOTYgMTE4LjQxMVoiLz4KICAgIDxwYXRoIGZpbGw9InVybCgjYWJtLWdyYWQpIiBkPSJNMTA4LjQ1OCA2NC42NjFDMTAzLjkyMiA1Ny40OTgxIDk2LjI4NTIgNDcuNjQ5MSA4NS40NDg3IDQwLjkwOTVMODMuMDU3NCAzOS40NzY5Qzc2LjU1ODQgMzUuNjM1IDY5LjQ4MjggMzMuNTgzOCA2Mi4wMjc1IDMzLjM1NTlDNjEuNTY1NyAzMy4zMzk2IDYxLjA3MDggMzMuMzM5NiA2MC41OTI1IDMzLjMzOTZDNTQuMjQyMyAzMy4zMzk2IDQ4LjUwMjQgMzQuNjI1NyA0My43ODUyIDM2LjIyMTFMNDcuMjY1NCAzMC40NDE5TDQ4LjcxNjggMjguMDgxNEw1MC44NDQ2IDI0LjUzMjVMNTEuODM0MiAyMi44ODg0QzU0LjYwNTIgMTguMjY1IDU3LjcwNjEgMTQuMjI3OCA2MS4wMjE0IDEwLjg1NzlMNjEuMzY3NyAxMC41MTYxQzYyLjA2MDUgOS44NDg2NCA2Mi43MzY1IDkuMTk3NDQgNjMuNDI5NSA4LjU5NTE1QzY0LjIwNDUgNy45MTE0MSA2NS4wMjk1IDcuMjQzOTcgNjUuODg3MSA2LjYwOTA4QzY2Ljc3NzkgNS45NDE2IDY3LjY1MTggNS4zMzkyNyA2OC41MjYzIDQuNzg1NzdDNjguODcyNSA0LjU1Nzg2IDY5LjE1MjkgNC4zNzg3OSA2OS40MzM0IDQuMjQ4NTZMNjkuODc4NCA0LjAyMDY1TDY5Ljk2MTEgMy45MzkyNUM3MC4xMjYzIDMuODQxNTggNzAuMjkxIDMuNzQzOSA3MC40NTYyIDMuNjQ2MjJMNzAuOTE3NiAzLjQxODMyQzcxLjY0MzcgMy4wNDM4OSA3Mi40MTg3IDIuNjY5NDcgNzMuMzc1MiAyLjI0NjIxTDczLjUyMzYgMi4xODEwOUM3NC43MTExIDEuNzA4OTkgNzUuNzk5NyAxLjMzNDU3IDc2LjgzODggMS4wMjUyNkw3Ny4wNTM1IDAuOTc2NDIzQzc3LjYzMDcgMC44Mjk5MTMgNzguMTU4NCAwLjY4MzM5NiA3OC43MzYyIDAuNTg1NzIyTDgwLjY5ODcgMC4yNDM4NTdDODEuODAzNiAwLjA5NzM0MzggODIuOTA5MSAwLjAzMjIyNjYgODQuMDEzOSAwLjAzMjIyNjZDODUuMDE5OSAwLjAzMjIyNjYgODYuMDkyMiAwLjA5NzM0MzkgODcuMjE0IDAuMjI3NTc4Qzg3LjYwOTYgMC4yNzY0MTYgODguMDIyMSAwLjM0MTUzMyA4OC40MTc4IDAuNDA2NjVMODguNDUxIDAuNDM5MjA5TDg5LjQ0MDYgMC42MDIwMDFDODkuNjM4NSAwLjYzNDU1OSA4OS44MzYzIDAuNjgzMzk2IDkwLjA2NzMgMC43MzIyMzNDOTAuNTQ1NSAwLjg0NjE5IDkwLjk3NDMgMC45NjAxNDYgOTEuMzcwNiAxLjA5MDM4TDkxLjc2NjIgMS4yMDQzNEM5Mi4wNjI5IDEuMzAyMDEgOTIuMzc2NSAxLjM4MzQxIDkyLjY3MzMgMS40OTczNkw5My4zMTY4IDEuNzI1MjdMOTMuOTU5NyAxLjk2OTQ2Qzk0LjM1NTkgMi4xMzIyNSA5NC43ODQ3IDIuMzExMzIgOTUuMjEzNSAyLjUwNjY4Qzk2LjEwNDMgMi44OTczOCA5Ny4wMTE0IDMuMzUzMiA5Ny45MzQ3IDMuODkwNDFDOTguODI1NSA0LjM5NTA3IDk5LjcxNjMgNC45NDg1NyAxMDAuNjczIDUuNTk5NzRDMTAzLjM5NSA3LjUwNDQzIDEwNi4wNSA5LjkxMzczIDEwOC41NCAxMi43MTM4QzEwOS44MjcgMTQuMTYyNiAxMTEuMDk3IDE1Ljc5MDYgMTEyLjMzNCAxNy41MzI0QzExMy43MzYgMTkuNTAyMyAxMTQuOTU3IDIxLjc5NzYgMTE1Ljk4IDI0LjM4NkMxMTYuNDA4IDI1LjQ0NDIgMTE2LjcyMSAyNi41NTExIDExNi45MiAyNy42NzQ0QzExNy4zMzIgMjkuOTM3MiAxMTcuNjEyIDMxLjc2MDUgMTE3LjcxMSAzMi45MzI2QzExNy43NDQgMzMuMjkwOCAxMTcuNzc3IDMzLjY0ODkgMTE3Ljc3NyAzMy45OTA4VjM0LjE4NjFDMTE3LjgxIDM0LjQzMDQgMTE3LjgyNyAzNC42NTgzIDExNy44MjcgMzQuOTE4N1YzNS4wODE1QzExNy44NTkgMzUuNjgzOCAxMTcuODc2IDM2LjMwMjQgMTE3Ljg3NiAzNi45NTM2QzExNy44NzYgNDIuNzgxNiAxMTYuODA0IDQ4LjQxNDMgMTE0LjY5MiA1My43MDVMMTE0LjYyNyA1My44Njc4QzExNC41NzcgNTMuOTk4IDExNC41MjggNTQuMTEyIDExNC40NzggNTQuMjI1OUwxMTQuMzk2IDU0LjQwNUwxMTQuMzMgNTQuNTg0MUwxMTQuMjY0IDU0LjczMDZMMTE0LjIxNCA1NC44NzcxQzExNC4yMTQgNTQuODc3MSAxMTQuMTQ4IDU1LjAzOTkgMTE0LjExNSA1NS4xMjEzQzExMi42NDcgNTguNDc0OCAxMTAuNzUxIDYxLjY4MTggMTA4LjQ0MSA2NC43MjYxTDEwOC40NTggNjQuNjYxWiIvPgogICAgPHBhdGggZmlsbD0iI0ZGMjE2QiIgZD0iTTI4LjI5MyAxNDkuOTc3QzI2LjU2MTEgMTQ5Ljk3NyAyNC44MjkyIDE0OS44MyAyMy4xMzAzIDE0OS41MDVDMTkuMDA2OCAxNDguNzIzIDE1LjExNDIgMTQ2Ljk0OSAxMS43MzMgMTQ0LjUyM0M4LjM1MTcxIDE0Mi4wOTggNS4zNjYzIDEzOC44OTEgMy4yODgwNSAxMzUuMjI4QzIuODA5NzMgMTM0LjM5OCAyLjM5NzM4IDEzMy41MzUgMi4wMTgwMiAxMzIuNjU1QzEuNDI0MjMgMTMxLjIzOSAwLjk2MjQwMyAxMjkuNzkxIDAuNjMyNTI1IDEyOC4yOTNDMC41NTAwNTMgMTI3Ljg3IDAuNDY3NTgzIDEyNy40NDYgMC4zODUxMTMgMTI3LjAwN0wwLjMwMjY0MyAxMjYuNTY3QzAuMjM2NjY4IDEyNi4xNzYgMC4xODcxODYgMTI1LjcyMSAwLjEzNzcwNCAxMjUuMjQ4QzAuMDg4MjIxNSAxMjQuNzQ0IDAuMDU1MjMzNyAxMjQuMjA3IDAuMDM4NzM5NyAxMjMuNzE5VjEyMy4zMjhDMC4wMDU3NTE3OCAxMjIuODU2IC0wLjAxMDc0MjIgMTIyLjQ2NSAtMC4wMTA3NDIyIDEyMi4wOUMtMC4wMTA3NDIyIDEyMS41MjEgMC4wODgyMjE1IDExOS4xMTEgMC4xMzc3MDQgMTE4Ljc1M0MwLjEzNzcwNCAxMTguNzUzIDAuMjIwMTczIDExNy45MDcgMC4yNjk2NTYgMTE3LjYxNEwwLjQxODEwMSAxMTYuNTIzQzAuNDE4MTAxIDExNi41MjMgMC41ODMwNDEgMTE1LjUzIDAuNTgzMDQxIDExNS40OTdDMC41ODMwNDEgMTE1LjQ5NyAxLjIyNjMxIDExMi4zMjMgMS4zMDg3OCAxMTIuMDNDMS44MjAwOSAxMTUuMTg4IDIuNzkzMjMgMTE3Ljg1OCA0LjIxMTcxIDExOS45OUM2LjM1NTkzIDEyMy4wNjcgOS40ODk3NiAxMjUuMDg2IDEzLjE4NDQgMTI1Ljg2N0MxNi4zODQzIDEyNi41MzUgMTkuNzMyNSAxMjYuMjkgMjIuOTE1OSAxMjUuNjA3QzI4LjkxOTcgMTI0LjMwNCAzNC4xODEzIDEyMS40MDcgMzkuNjI0MyAxMTguNzM3QzQyLjQ3NzggMTE3LjMzNyA0NS4yNjUyIDExNS44MjMgNDguMDM2MiAxMTQuMjkzQzU2LjA2ODggMTA5LjkxNCA2My45ODU4IDEwNS4zMDcgNzEuODUzMyAxMDAuNjUxQzc4LjY2NTMgOTYuNjI5NSA4NS42NTg4IDkyLjc3MTYgOTIuMjU2OCA4OC40MjQ3TDkzLjE0NjkgODcuODcxMkw5My43OTA1IDg3LjQ5NjhMOTMuODIzNiA4Ny40NjQ2Qzk0LjEwNDEgODcuMzAxNiA5NC4zODQ1IDg3LjEyMjQgOTQuNjY1IDg2Ljk0MzNMOTUuNzIwNCA4Ni4zMDg2TDk1LjgwMyA4Ni4yMTEzQzEwMS41NzYgODIuNTMxOSAxMDYuNTczIDc4LjQ0NiAxMTAuNjk3IDc0LjAxNzlDMTE1LjMxNSA2OS4wNTI0IDExOC45MjcgNjMuNTgzIDEyMS40MTggNTcuNzM4NUMxMjMuODEgNTIuMTg3MyAxMjUuMTk1IDQ2LjI3NzkgMTI1LjU1OCA0MC4xNDA2TDEzNC4xMTggNTUuMjgwNEwxMzYuMTMxIDU4Ljc0NzlMMTUyLjE5NSA4Ny4wMDg0TDE1My4wMzcgODguNTA2NUMxNTQuNDM5IDkwLjk5NyAxNTcuOTg1IDk3LjQxMTEgMTYxLjE4NSAxMDMuODI1QzE1OS45OTcgMTAzLjM3IDE1OC43NDQgMTAyLjk3OCAxNTcuMzkxIDEwMi42MjFDMTU2LjkzIDEwMi40NzQgMTU2LjQ2OCAxMDIuMzYgMTU1Ljk5IDEwMi4yNDZDMTU1LjI2MyAxMDIuMDgzIDE1NC41NTQgMTAxLjkyIDE1My43OTUgMTAxLjc5TDE1Mi43NCAxMDEuNTk1QzE1MS44NjYgMTAxLjQ0OSAxNTAuOTI2IDEwMS4zMTggMTQ5Ljk4NiAxMDEuMjA0TDE0OS43NzEgMTAxLjE3MkgxNDkuNTU3QzE0OS4yOTMgMTAxLjEyMyAxNDkuMDEyIDEwMS4wOSAxNDguNzE1IDEwMS4wNzRDMTQ4LjMwMyAxMDEuMDI1IDE0Ny44OTEgMTAxLjAwOSAxNDcuNDc5IDEwMC45NzZDMTQ2LjE5MiAxMDAuODk1IDE0NS4wMjEgMTAwLjg2MiAxNDMuOCAxMDAuODYyQzEzOC4zMDggMTAwLjg2MiAxMzIuNDIgMTAxLjY0NCAxMjYuMzE3IDEwMy4xNzRDMTE3Ljg4OCAxMDUuMzIzIDEwOC45MTYgMTA4LjkzNyA5OS41OTY1IDExMy45NjdMOTkuMTM0NSAxMTQuMTE0TDk4LjkzNjcgMTE0LjI5M0w5OC44NzA0IDExNC4zMjVMOTguODIwOSAxMTQuMzc0Qzk0LjU5ODYgMTE2Ljg4MSA5MC4zNiAxMTkuMzg4IDg2LjEzNzEgMTIxLjg5NUM4Mi4xNjIxIDEyNC4yNTUgNzguMTg3IDEyNi42IDc0LjIxMiAxMjguOTQ0QzcwLjYgMTMxLjA3NyA2Ni45NzEyIDEzMy4yMjYgNjMuMzQyOSAxMzUuMzU4QzYwLjE3NTggMTM3LjIzIDU3LjAwOSAxMzkuMDg2IDUzLjg0MjEgMTQwLjk0MkM1MC4zNzgzIDE0Mi45NzcgNDYuOTQ3NiAxNDUuMDYxIDQzLjIzNjUgMTQ2LjY0QzQxLjMwNjcgMTQ3LjQ3IDM5LjM0MzkgMTQ4LjE3IDM3LjMxNTIgMTQ4LjcyM0MzNC4zNjI3IDE0OS41MjEgMzEuMjk0OCAxNDkuOTkzIDI4LjIyNyAxNDkuOTc3SDI4LjI5M1oiLz4KICA8L2c+CiAgPHRleHQgeD0iMTAwIiB5PSIxODIiIGZvbnQtZmFtaWx5PSInQmFybG93IFNlbWkgQ29uZGVuc2VkJywnQmFybG93JyxBcmlhbCxzYW5zLXNlcmlmIiBmb250LXNpemU9IjIyIiBmb250LXdlaWdodD0iNzAwIiBsZXR0ZXItc3BhY2luZz0iMS41IiBmaWxsPSJ1cmwoI3dtKSIgdGV4dC1hbmNob3I9Im1pZGRsZSI+QUJTVFJBQ1Q8L3RleHQ+Cjwvc3ZnPgo=\" width=\"75px\" height=\"75px\">",
+        "author": {
+          "name": "Abstract Security",
+          "email": "support@abstract.security"
+        },
+        "support": {
+          "name": "Abstract Security",
+          "tier": "Partner",
+          "link": "https://abstract.security"
+        },
+        "providers": [
+          "Abstract Security"
+        ],
+        "firstPublishDate": "2026-06-17",
+        "categories": {
+          "domains": [
+            "Security - Threat Protection",
+            "Security - Cloud Security"
+          ]
+        },
+        "source": {
+          "kind": "Solution",
+          "name": "Abstract Security",
+          "sourceId": "ffb59bbb-ab7c-5964-8c86-22d7b5df331b"
+        },
+        "dependencies": {
+          "operator": "AND",
+          "criteria": [
+            {
+              "kind": "DataConnector",
+              "contentId": "a05f654e-4beb-537f-bc76-a086be9a1df8",
+              "version": "1.0.0"
+            },
+            {
+              "kind": "DataConnector",
+              "contentId": "b1c2d3e4-5f60-5a7b-8c9d-0e1f2a3b4c5d",
+              "version": "1.0.0"
+            },
+            {
+              "kind": "Parser",
+              "contentId": "a747a581-030c-585b-b7fe-0d56a851727b",
+              "version": "1.0.0"
+            },
+            {
+              "kind": "HuntingQuery",
+              "contentId": "c2d3e4f5-6071-5b8c-9d0e-1f2a3b4c5d6e",
+              "version": "1.0.0"
+            },
+            {
+              "kind": "AutomationRule",
+              "contentId": "d3e4f5a6-7182-5c9d-0e1f-2a3b4c5d6e7f",
+              "version": "1.0.0"
+            },
+            {
+              "kind": "AutomationRule",
+              "contentId": "e4f5a6b7-8293-5daf-1f2a-3b4c5d6e7f80",
+              "version": "1.0.0"
+            },
+            {
+              "kind": "AutomationRule",
+              "contentId": "f5a6b7c8-93a4-5eb0-2a3b-4c5d6e7f8091",
+              "version": "1.0.0"
+            },
+            {
+              "kind": "AnalyticsRule",
+              "contentId": "c0543ccb-b53d-5e56-917f-9210def2c413",
+              "version": "1.0.0"
+            },
+            {
+              "kind": "AnalyticsRule",
+              "contentId": "7918c399-841e-5466-ade1-8dc5ac08a6c5",
+              "version": "1.0.0"
+            },
+            {
+              "kind": "HuntingQuery",
+              "contentId": "b0622120-583b-52dd-ad91-584ac3d09df4",
+              "version": "1.0.0"
+            },
+            {
+              "kind": "HuntingQuery",
+              "contentId": "880d9fb9-9f9a-532c-b9a2-78ebb936f374",
+              "version": "1.0.0"
+            },
+            {
+              "kind": "Workbook",
+              "contentId": "d67cbed4-8474-5230-8f45-e06905417e1b",
+              "version": "1.0.0"
+            },
+            {
+              "kind": "Workbook",
+              "contentId": "e1f2a3b4-5c6d-5e7f-8a9b-0c1d2e3f4a5b",
+              "version": "1.0.0"
+            },
+            {
+              "kind": "Workbook",
+              "contentId": "f2a3b4c5-6d7e-5f8a-9b0c-1d2e3f4a5b6c",
+              "version": "1.0.0"
+            },
+            {
+              "kind": "Playbook",
+              "contentId": "1f0e6a41-2b7c-5c8d-9e10-a1b2c3d4e5f6",
+              "version": "1.0.0"
+            },
+            {
+              "kind": "Playbook",
+              "contentId": "2a1b7c52-3c8d-5d9e-af21-b2c3d4e5f607",
+              "version": "1.0.0"
+            },
+            {
+              "kind": "Playbook",
+              "contentId": "3b2c8d63-4d9e-5eaf-b032-c3d4e5f60718",
+              "version": "1.0.0"
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/dataConnectorDefinitions",
+      "apiVersion": "2022-09-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/AbstractSecurityConnector')]",
+      "location": "[parameters('workspace-location')]",
+      "kind": "Customizable",
+      "properties": {
+        "connectorUiConfig": {
+          "id": "AbstractSecurityConnector",
+          "title": "Abstract Security (Security Data Pipeline)",
+          "publisher": "Abstract Security",
+          "logo": "[parameters('logoUrl')]",
+          "descriptionMarkdown": "**Abstract Security** delivers normalized, enriched, cost-reduced security telemetry into Microsoft Sentinel through the Azure Monitor Logs Ingestion API (Data Collection Rule). Use this connector to confirm delivery and jump to the deployment + setup steps.",
+          "graphQueriesTableName": "[parameters('customTableName')]",
+          "graphQueries": [
+            {
+              "metricName": "Abstract events received",
+              "legend": "AbstractEventLogs_CL",
+              "baseQuery": "[parameters('customTableName')]"
+            }
+          ],
+          "sampleQueries": [
+            {
+              "description": "All Abstract events (last 24h)",
+              "query": "AbstractEventLogs_CL\n| where TimeGenerated > ago(24h)\n| sort by TimeGenerated desc"
+            },
+            {
+              "description": "Abstract events by product",
+              "query": "AbstractEventLogs_CL\n| where TimeGenerated > ago(7d)\n| summarize count() by tostring(AbstractEvent.product)"
+            }
+          ],
+          "dataTypes": [
+            {
+              "name": "[parameters('customTableName')]",
+              "lastDataReceivedQuery": "AbstractEventLogs_CL\n| summarize Time = max(TimeGenerated)\n| where isnotempty(Time)"
+            }
+          ],
+          "connectivityCriteria": [
+            {
+              "type": "HasDataConnectors"
+            },
+            {
+              "type": "IsConnectedQuery",
+              "value": [
+                "AbstractEventLogs_CL\n| where TimeGenerated > ago(7d)\n| summarize LastLogReceived = max(TimeGenerated)\n| project IsConnected = LastLogReceived > ago(3d)"
+              ]
+            }
+          ],
+          "availability": {
+            "isPreview": true
+          },
+          "permissions": {
+            "resourceProvider": [
+              {
+                "provider": "Microsoft.OperationalInsights/workspaces",
+                "permissionsDisplayText": "read and write permissions are required.",
+                "providerDisplayName": "Workspace",
+                "scope": "Workspace",
+                "requiredPermissions": {
+                  "read": true,
+                  "write": true,
+                  "delete": true
+                }
+              }
+            ],
+            "customs": [
+              {
+                "name": "Abstract Security tenant",
+                "description": "An Abstract Security account with a configured Azure Sentinel destination integration."
+              },
+              {
+                "name": "Entra app registration",
+                "description": "An app registration whose service principal holds Monitoring Metrics Publisher + Monitoring Contributor on the Data Collection Rule (deployed by the Sentinel Destination template)."
+              }
+            ]
+          },
+          "instructionSteps": [
+            {
+              "title": "1. Deploy the Azure ingestion stack",
+              "description": "Deploy the **Azure Sentinel Destination** template (workspace + Sentinel + Data Collection Endpoint + custom table + Data Collection Rule + RBAC) from the Abstract Azure repo."
+            },
+            {
+              "title": "2. Create the Entra app",
+              "description": "Register an app + client secret and grant its service principal **Monitoring Metrics Publisher** and **Monitoring Contributor** on the DCR (the template does this when you pass the SP object id)."
+            },
+            {
+              "title": "3. Configure the destination in Abstract",
+              "description": "In Abstract, add the **Azure Sentinel Destination** integration and paste the Client ID / Secret / Tenant ID, the **DCR Immutable ID**, the **DCE URL**, and the **Log Stream Name** (Custom-<table>) from the deployment outputs."
+            },
+            {
+              "title": "4. Route data and confirm",
+              "description": "Route a pipeline to the destination. Within minutes the graph above should turn green as events land in the custom table."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/metadata",
+      "apiVersion": "2023-04-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/DataConnector-a05f654e-4beb-537f-bc76-a086be9a1df8')]",
+      "location": "[parameters('workspace-location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/providers/dataConnectorDefinitions', parameters('workspace'),'Microsoft.SecurityInsights','AbstractSecurityConnector')]"
+      ],
+      "properties": {
+        "parentId": "[resourceId('Microsoft.OperationalInsights/workspaces/providers/dataConnectorDefinitions', parameters('workspace'),'Microsoft.SecurityInsights','AbstractSecurityConnector')]",
+        "contentId": "a05f654e-4beb-537f-bc76-a086be9a1df8",
+        "kind": "DataConnector",
+        "version": "1.0.0",
+        "source": {
+          "kind": "Solution",
+          "name": "Abstract Security",
+          "sourceId": "ffb59bbb-ab7c-5964-8c86-22d7b5df331b"
+        },
+        "author": {
+          "name": "Abstract Security",
+          "email": "support@abstract.security"
+        },
+        "support": {
+          "name": "Abstract Security",
+          "tier": "Partner",
+          "link": "https://abstract.security"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/savedSearches",
+      "apiVersion": "2022-10-01",
+      "name": "[concat(parameters('workspace'),'/ASim_AbstractEvent')]",
+      "properties": {
+        "etag": "*",
+        "displayName": "ASim_AbstractEvent",
+        "category": "ASIM",
+        "FunctionAlias": "ASim_AbstractEvent",
+        "query": "// =============================================================================\n// ASim_AbstractEvent  \u2014  ASIM-style normalizing parser for Abstract Security\n// -----------------------------------------------------------------------------\n// Source : AbstractEventLogs_CL  (the custom table the Sentinel Destination\n//          template creates; default schema = TimeGenerated, Message,\n//          AbstractEvent:dynamic that carries the Abstract Common Schema event).\n// Purpose: project the Abstract Common Schema (ACS) into ASIM-aligned column\n//          names so Abstract-delivered data lights up Microsoft's ASIM-based\n//          analytics, and add convenient ACS pass-through fields.\n//\n// Deploy : Logs > New query > paste > Save as function, Function alias:\n//          ASim_AbstractEvent   (Legacy category: ASIM)\n//          Then query it like a table:  ASim_AbstractEvent | take 50\n//\n// Field mapping is grounded in the live ACS catalog (473 fields). If you ingest\n// the full all_fields schema as explicit columns instead of the dynamic\n// AbstractEvent column, swap `e.<field>` for `columnname_s` accordingly.\n// =============================================================================\nlet ASim_AbstractEvent = (disabled: bool = false) {\n    AbstractEventLogs_CL\n    | where not(disabled)\n    | extend e = AbstractEvent\n    // ---- core / ASIM common ----\n    | extend\n        EventVendor      = tostring(e.vendor),\n        EventProduct     = tostring(e.product),\n        EventType        = tostring(e.type),\n        EventResult      = tostring(e.action),\n        EventSeverity    = tostring(e.severity),\n        EventMessage     = coalesce(tostring(e.message), Message),\n        EventCount       = toreal(e.aggregation_count),\n        EventRiskScore   = toreal(e.risk_score)\n    // ---- network ----\n    | extend\n        SrcIpAddr        = coalesce(tostring(e.source_ipv4), tostring(e.source_ipv6), tostring(e.source_address)),\n        DstIpAddr        = coalesce(tostring(e.dest_ipv4), tostring(e.dest_ipv6), tostring(e.dest_address)),\n        SrcPortNumber    = toint(e.source_port),\n        DstPortNumber    = toint(e.dest_port),\n        DvcIpAddr        = coalesce(tostring(e.host_ipv4), tostring(e.host_ipv6), tostring(e.host_address)),\n        DvcHostname      = tostring(e.host_name)\n    // ---- identity ----\n    | extend\n        ActorUsername    = coalesce(tostring(e.user_name), tostring(e.user_id)),\n        TargetUsername   = tostring(e['user.target.name']),\n        UserAgent        = tostring(e.user_agent)\n    // ---- correlation back to Abstract ----\n    | extend\n        AbstractEventId    = tostring(e.id),\n        AbstractIdentity   = tostring(e.identity),\n        AbstractMatchedRules = e.matched_rules,\n        AbstractTags       = e.tags,\n        AbstractTimestamp  = todatetime(e['@timestamp'])\n    | project-reorder\n        TimeGenerated, EventVendor, EventProduct, EventType, EventResult, EventSeverity,\n        SrcIpAddr, DstIpAddr, SrcPortNumber, DstPortNumber, ActorUsername, EventMessage,\n        EventRiskScore, AbstractEventId, AbstractIdentity\n};\nASim_AbstractEvent\n",
+        "functionParameters": "",
+        "version": 2
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/metadata",
+      "apiVersion": "2023-04-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/Parser-a747a581-030c-585b-b7fe-0d56a851727b')]",
+      "location": "[parameters('workspace-location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/savedSearches', parameters('workspace'),'ASim_AbstractEvent')]"
+      ],
+      "properties": {
+        "parentId": "[resourceId('Microsoft.OperationalInsights/workspaces/savedSearches', parameters('workspace'),'ASim_AbstractEvent')]",
+        "contentId": "a747a581-030c-585b-b7fe-0d56a851727b",
+        "kind": "Parser",
+        "version": "1.0.0",
+        "source": {
+          "kind": "Solution",
+          "name": "Abstract Security",
+          "sourceId": "ffb59bbb-ab7c-5964-8c86-22d7b5df331b"
+        },
+        "author": {
+          "name": "Abstract Security",
+          "email": "support@abstract.security"
+        },
+        "support": {
+          "name": "Abstract Security",
+          "tier": "Partner",
+          "link": "https://abstract.security"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+      "apiVersion": "2023-02-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/c0543ccb-b53d-5e56-917f-9210def2c413')]",
+      "location": "[parameters('workspace-location')]",
+      "kind": "Scheduled",
+      "properties": {
+        "displayName": "Abstract Security - High or Critical event",
+        "enabled": true,
+        "severity": "High",
+        "description": "High/critical Abstract event; surfaces AbstractInsightId for the Verdict playbook.",
+        "query": "AbstractEventLogs_CL\n| where TimeGenerated > ago(1h)\n| extend e = AbstractEvent\n| extend AbstractSeverity=tolower(tostring(e.severity)), SrcIpAddr=coalesce(tostring(e.source_ipv4),tostring(e.source_address)), ActorUsername=coalesce(tostring(e.user_name),tostring(e.user_id)), AbstractInsightId=tostring(e.id), EventProduct=tostring(e.product), EventMessage=coalesce(tostring(e.message),Message)\n| where AbstractSeverity in (\"high\",\"critical\")\n| project TimeGenerated, AbstractSeverity, EventProduct, EventMessage, SrcIpAddr, ActorUsername, AbstractInsightId",
+        "queryFrequency": "PT1H",
+        "queryPeriod": "PT1H",
+        "triggerOperator": "GreaterThan",
+        "triggerThreshold": 0,
+        "suppressionDuration": "PT1H",
+        "suppressionEnabled": false,
+        "tactics": [
+          "InitialAccess",
+          "Execution"
+        ],
+        "incidentConfiguration": {
+          "createIncident": true,
+          "groupingConfiguration": {
+            "enabled": true,
+            "reopenClosedIncident": false,
+            "lookbackDuration": "PT5H",
+            "matchingMethod": "Selected",
+            "groupByEntities": [
+              "IP",
+              "Account"
+            ],
+            "groupByAlertDetails": [],
+            "groupByCustomDetails": []
+          }
+        },
+        "eventGroupingSettings": {
+          "aggregationKind": "AlertPerResult"
+        },
+        "customDetails": {
+          "AbstractInsightId": "AbstractInsightId",
+          "AbstractSeverity": "AbstractSeverity",
+          "EventProduct": "EventProduct"
+        },
+        "entityMappings": [
+          {
+            "entityType": "IP",
+            "fieldMappings": [
+              {
+                "identifier": "Address",
+                "columnName": "SrcIpAddr"
+              }
+            ]
+          },
+          {
+            "entityType": "Account",
+            "fieldMappings": [
+              {
+                "identifier": "Name",
+                "columnName": "ActorUsername"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/metadata",
+      "apiVersion": "2023-04-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/AnalyticsRule-c0543ccb-b53d-5e56-917f-9210def2c413')]",
+      "location": "[parameters('workspace-location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/providers/alertRules', parameters('workspace'),'Microsoft.SecurityInsights','c0543ccb-b53d-5e56-917f-9210def2c413')]"
+      ],
+      "properties": {
+        "parentId": "[resourceId('Microsoft.OperationalInsights/workspaces/providers/alertRules', parameters('workspace'),'Microsoft.SecurityInsights','c0543ccb-b53d-5e56-917f-9210def2c413')]",
+        "contentId": "c0543ccb-b53d-5e56-917f-9210def2c413",
+        "kind": "AnalyticsRule",
+        "version": "1.0.0",
+        "source": {
+          "kind": "Solution",
+          "name": "Abstract Security",
+          "sourceId": "ffb59bbb-ab7c-5964-8c86-22d7b5df331b"
+        },
+        "author": {
+          "name": "Abstract Security",
+          "email": "support@abstract.security"
+        },
+        "support": {
+          "name": "Abstract Security",
+          "tier": "Partner",
+          "link": "https://abstract.security"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+      "apiVersion": "2023-02-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/7918c399-841e-5466-ade1-8dc5ac08a6c5')]",
+      "location": "[parameters('workspace-location')]",
+      "kind": "Scheduled",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/savedSearches', parameters('workspace'),'ASim_AbstractEvent')]"
+      ],
+      "properties": {
+        "displayName": "Abstract - Repeated auth failures followed by success",
+        "enabled": true,
+        "severity": "High",
+        "description": "Detects a likely successful brute force / password spray: many failed authentication events followed by a success from the same source IP within a short window, using Abstract-normalized auth telemetry (ASim_AbstractEvent). Tune the EventResult terms to your products.",
+        "query": "let failures = ASim_AbstractEvent\n  | where TimeGenerated > ago(1h)\n  | where EventType has_any (\"auth\", \"login\", \"logon\") or EventResult has \"fail\"\n  | where EventResult has_any (\"fail\", \"failure\", \"denied\")\n  | summarize Failures = count(), FailUsers = make_set(ActorUsername, 25) by SrcIpAddr, bin(TimeGenerated, 10m)\n  | where Failures >= 10;\nlet successes = ASim_AbstractEvent\n  | where TimeGenerated > ago(1h)\n  | where EventResult has_any (\"success\", \"succeeded\", \"allowed\")\n  | project SuccessTime = TimeGenerated, SrcIpAddr, ActorUsername, AbstractInsightId = AbstractEventId, EventProduct;\nfailures\n| join kind=inner successes on SrcIpAddr\n| where SuccessTime between (TimeGenerated .. (TimeGenerated + 10m))\n| where set_has_element(FailUsers, ActorUsername)\n| project SuccessTime, SrcIpAddr, ActorUsername, Failures, EventProduct, AbstractInsightId\n| sort by Failures desc",
+        "queryFrequency": "PT1H",
+        "queryPeriod": "PT1H",
+        "triggerOperator": "GreaterThan",
+        "triggerThreshold": 0,
+        "suppressionDuration": "PT1H",
+        "suppressionEnabled": false,
+        "tactics": [
+          "CredentialAccess"
+        ],
+        "techniques": [
+          "T1110"
+        ],
+        "incidentConfiguration": {
+          "createIncident": true,
+          "groupingConfiguration": {
+            "enabled": true,
+            "reopenClosedIncident": false,
+            "lookbackDuration": "PT5H",
+            "matchingMethod": "Selected",
+            "groupByEntities": [
+              "IP",
+              "Account"
+            ],
+            "groupByAlertDetails": [],
+            "groupByCustomDetails": []
+          }
+        },
+        "eventGroupingSettings": {
+          "aggregationKind": "AlertPerResult"
+        },
+        "customDetails": {
+          "AbstractInsightId": "AbstractInsightId",
+          "FailureCount": "Failures"
+        },
+        "entityMappings": [
+          {
+            "entityType": "IP",
+            "fieldMappings": [
+              {
+                "identifier": "Address",
+                "columnName": "SrcIpAddr"
+              }
+            ]
+          },
+          {
+            "entityType": "Account",
+            "fieldMappings": [
+              {
+                "identifier": "Name",
+                "columnName": "ActorUsername"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/metadata",
+      "apiVersion": "2023-04-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/AnalyticsRule-7918c399-841e-5466-ade1-8dc5ac08a6c5')]",
+      "location": "[parameters('workspace-location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/providers/alertRules', parameters('workspace'),'Microsoft.SecurityInsights','7918c399-841e-5466-ade1-8dc5ac08a6c5')]"
+      ],
+      "properties": {
+        "parentId": "[resourceId('Microsoft.OperationalInsights/workspaces/providers/alertRules', parameters('workspace'),'Microsoft.SecurityInsights','7918c399-841e-5466-ade1-8dc5ac08a6c5')]",
+        "contentId": "7918c399-841e-5466-ade1-8dc5ac08a6c5",
+        "kind": "AnalyticsRule",
+        "version": "1.0.0",
+        "source": {
+          "kind": "Solution",
+          "name": "Abstract Security",
+          "sourceId": "ffb59bbb-ab7c-5964-8c86-22d7b5df331b"
+        },
+        "author": {
+          "name": "Abstract Security",
+          "email": "support@abstract.security"
+        },
+        "support": {
+          "name": "Abstract Security",
+          "tier": "Partner",
+          "link": "https://abstract.security"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/savedSearches",
+      "apiVersion": "2022-10-01",
+      "name": "[concat(parameters('workspace'),'/Abstract_RareProduct')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/savedSearches', parameters('workspace'),'ASim_AbstractEvent')]"
+      ],
+      "properties": {
+        "etag": "*",
+        "displayName": "Abstract - Rare or newly-seen product activity",
+        "category": "Hunting Queries",
+        "query": "ASim_AbstractEvent\n| where TimeGenerated > ago(14d)\n| summarize Events = count(), FirstSeen = min(TimeGenerated), LastSeen = max(TimeGenerated) by EventProduct, EventVendor\n| where Events < 50 and FirstSeen > ago(3d)\n| extend Rarity = round(1.0 / Events, 4)\n| sort by Events asc",
+        "version": 2,
+        "tags": [
+          {
+            "name": "description",
+            "value": "Surfaces products/sources in the Abstract pipeline that are rare or first seen in the last few days (shadow IT, misconfigured route, or attacker enabling a new logging surface)."
+          },
+          {
+            "name": "tactics",
+            "value": "Discovery"
+          },
+          {
+            "name": "techniques",
+            "value": "T1518"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/metadata",
+      "apiVersion": "2023-04-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/HuntingQuery-b0622120-583b-52dd-ad91-584ac3d09df4')]",
+      "location": "[parameters('workspace-location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/savedSearches', parameters('workspace'),'Abstract_RareProduct')]"
+      ],
+      "properties": {
+        "parentId": "[resourceId('Microsoft.OperationalInsights/workspaces/savedSearches', parameters('workspace'),'Abstract_RareProduct')]",
+        "contentId": "b0622120-583b-52dd-ad91-584ac3d09df4",
+        "kind": "HuntingQuery",
+        "version": "1.0.0",
+        "source": {
+          "kind": "Solution",
+          "name": "Abstract Security",
+          "sourceId": "ffb59bbb-ab7c-5964-8c86-22d7b5df331b"
+        },
+        "author": {
+          "name": "Abstract Security",
+          "email": "support@abstract.security"
+        },
+        "support": {
+          "name": "Abstract Security",
+          "tier": "Partner",
+          "link": "https://abstract.security"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/savedSearches",
+      "apiVersion": "2022-10-01",
+      "name": "[concat(parameters('workspace'),'/Abstract_HighRiskIdentities')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/savedSearches', parameters('workspace'),'ASim_AbstractEvent')]"
+      ],
+      "properties": {
+        "etag": "*",
+        "displayName": "Abstract - High cumulative-risk identities",
+        "category": "Hunting Queries",
+        "query": "ASim_AbstractEvent\n| where TimeGenerated > ago(7d) and isnotempty(AbstractIdentity)\n| summarize TotalRisk = sum(EventRiskScore), Events = count(), Products = make_set(EventProduct, 10), SrcIps = make_set(SrcIpAddr, 10), LastSeen = max(TimeGenerated) by AbstractIdentity, ActorUsername\n| where TotalRisk > 100 and array_length(Products) >= 2\n| sort by TotalRisk desc",
+        "version": 2,
+        "tags": [
+          {
+            "name": "description",
+            "value": "Aggregates Abstract risk_score by identity over 7 days and surfaces identities whose cumulative, pipeline-scored risk crosses a threshold across multiple products \u2014 a cross-source signal the SIEM rarely sees."
+          },
+          {
+            "name": "tactics",
+            "value": "CredentialAccess,LateralMovement"
+          },
+          {
+            "name": "techniques",
+            "value": "T1078"
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/metadata",
+      "apiVersion": "2023-04-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/HuntingQuery-880d9fb9-9f9a-532c-b9a2-78ebb936f374')]",
+      "location": "[parameters('workspace-location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/savedSearches', parameters('workspace'),'Abstract_HighRiskIdentities')]"
+      ],
+      "properties": {
+        "parentId": "[resourceId('Microsoft.OperationalInsights/workspaces/savedSearches', parameters('workspace'),'Abstract_HighRiskIdentities')]",
+        "contentId": "880d9fb9-9f9a-532c-b9a2-78ebb936f374",
+        "kind": "HuntingQuery",
+        "version": "1.0.0",
+        "source": {
+          "kind": "Solution",
+          "name": "Abstract Security",
+          "sourceId": "ffb59bbb-ab7c-5964-8c86-22d7b5df331b"
+        },
+        "author": {
+          "name": "Abstract Security",
+          "email": "support@abstract.security"
+        },
+        "support": {
+          "name": "Abstract Security",
+          "tier": "Partner",
+          "link": "https://abstract.security"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/workbooks",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(parameters('workspace'),'d67cbed4-8474-5230-8f45-e06905417e1b')]",
+      "location": "[parameters('workspace-location')]",
+      "kind": "shared",
+      "properties": {
+        "displayName": "Abstract Security - Pipeline Overview",
+        "serializedData": "{\"version\": \"Notebook/1.0\", \"items\": [{\"type\": 1, \"content\": {\"json\": \"## Abstract Security \\u2014 Pipeline Overview\\nNormalized, enriched, cost-reduced security telemetry delivered into Microsoft Sentinel by the Abstract data pipeline. Volume, coverage, and a pipeline-reduction estimate.\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"AbstractEventLogs_CL\\n| summarize Events=count() by bin(TimeGenerated, 1h)\\n| render timechart\", \"size\": 0, \"title\": \"Events ingested over time\", \"timeContext\": {\"durationMs\": 604800000}, \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"timechart\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"AbstractEventLogs_CL\\n| summarize Events=count()\", \"size\": 4, \"title\": \"Total Abstract events (7d)\", \"timeContext\": {\"durationMs\": 604800000}, \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"tiles\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"AbstractEventLogs_CL\\n| extend product=tostring(AbstractEvent.product)\\n| summarize Events=count() by product\\n| top 15 by Events desc\", \"size\": 0, \"title\": \"Events by product\", \"timeContext\": {\"durationMs\": 604800000}, \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"barchart\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"AbstractEventLogs_CL\\n| extend severity=tostring(AbstractEvent.severity)\\n| summarize Events=count() by severity\", \"size\": 0, \"title\": \"Events by severity\", \"timeContext\": {\"durationMs\": 604800000}, \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"piechart\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"// Pipeline reduction estimate: GB that landed in Sentinel.\\nAbstractEventLogs_CL\\n| extend acs_bytes = estimate_data_size(AbstractEvent)\\n| summarize Events=count(), SentinelGB=round(sum(acs_bytes)/1024.0/1024/1024,3)\", \"size\": 0, \"title\": \"Ingested volume (GB) \\u2014 pair with Abstract source volume for $ saved\", \"timeContext\": {\"durationMs\": 604800000}, \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"table\"}}], \"styleSettings\": {}, \"$schema\": \"https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json\"}",
+        "version": "1.0",
+        "category": "sentinel",
+        "sourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspace'))]"
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/metadata",
+      "apiVersion": "2023-04-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/Workbook-d67cbed4-8474-5230-8f45-e06905417e1b')]",
+      "location": "[parameters('workspace-location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/workbooks', guid(parameters('workspace'),'d67cbed4-8474-5230-8f45-e06905417e1b'))]"
+      ],
+      "properties": {
+        "parentId": "[resourceId('Microsoft.Insights/workbooks', guid(parameters('workspace'),'d67cbed4-8474-5230-8f45-e06905417e1b'))]",
+        "contentId": "d67cbed4-8474-5230-8f45-e06905417e1b",
+        "kind": "Workbook",
+        "version": "1.0.0",
+        "source": {
+          "kind": "Solution",
+          "name": "Abstract Security",
+          "sourceId": "ffb59bbb-ab7c-5964-8c86-22d7b5df331b"
+        },
+        "author": {
+          "name": "Abstract Security",
+          "email": "support@abstract.security"
+        },
+        "support": {
+          "name": "Abstract Security",
+          "tier": "Partner",
+          "link": "https://abstract.security"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/workbooks",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(parameters('workspace'),'e1f2a3b4-5c6d-5e7f-8a9b-0c1d2e3f4a5b')]",
+      "location": "[parameters('workspace-location')]",
+      "kind": "shared",
+      "properties": {
+        "displayName": "Abstract Security - Value & ROI",
+        "serializedData": "{\"version\": \"Notebook/1.0\", \"items\": [{\"type\": 1, \"content\": {\"json\": \"## Abstract Security \\u00d7 Microsoft Sentinel \\u2014 Value & ROI\\nAbstract normalizes, **aggregates, dedupes, enriches and risk-scores** security telemetry *before* it reaches Sentinel \\u2014 so you ingest fewer, richer events. This dashboard quantifies the win: **volume & cost reduction**, **enrichment coverage**, and **detection / hunt / AI-SOC effectiveness**. Set your Sentinel price and (optionally) your pre-Abstract source volume below to compute dollars saved.\"}}, {\"type\": 9, \"content\": {\"version\": \"KqlParameterItem/1.0\", \"parameters\": [{\"id\": \"prm-time\", \"version\": \"KqlParameterItem/1.0\", \"name\": \"TimeRange\", \"label\": \"Time range\", \"type\": 4, \"isRequired\": true, \"typeSettings\": {\"selectableValues\": [{\"durationMs\": 86400000}, {\"durationMs\": 604800000}, {\"durationMs\": 2592000000}, {\"durationMs\": 7776000000}]}, \"value\": {\"durationMs\": 2592000000}}, {\"id\": \"prm-price\", \"version\": \"KqlParameterItem/1.0\", \"name\": \"PricePerGB\", \"label\": \"Sentinel price / GB (USD)\", \"type\": 1, \"isRequired\": true, \"value\": \"2.30\", \"description\": \"Analytics-tier commitment/PAYG price per ingested GB. Adjust to your rate.\"}, {\"id\": \"prm-src\", \"version\": \"KqlParameterItem/1.0\", \"name\": \"SourceGBPerDay\", \"label\": \"Pre-Abstract source GB / day (optional)\", \"type\": 1, \"value\": \"0\", \"description\": \"Your measured daily volume BEFORE Abstract routing/filtering. Leave 0 to skip upstream-filtering savings.\"}], \"style\": \"pills\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\"}, \"name\": \"parameters\"}, {\"type\": 1, \"content\": {\"json\": \"### \\ud83d\\udcc9 Reduction & cost \\u2014 fewer, richer events in Sentinel\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"AbstractEventLogs_CL\\n| extend agg = todouble(coalesce(toreal(AbstractEvent.aggregation_count), 1.0)), b = todouble(estimate_data_size(AbstractEvent))\\n| summarize IngestedEvents = count(), RawEventsRepresented = sum(agg), IngestedBytes = sum(b)\\n| extend IngestedGB = round(IngestedBytes/1024.0/1024/1024, 3)\\n| extend AvgBytesPerEvent = iff(IngestedEvents>0, IngestedBytes/IngestedEvents, 0.0)\\n| extend AggregationRatio = round(iff(IngestedEvents>0, RawEventsRepresented/IngestedEvents, 1.0), 2)\\n| extend AvoidedEvents = RawEventsRepresented - IngestedEvents\\n| extend AvoidedGB = round((AvoidedEvents * AvgBytesPerEvent)/1024.0/1024/1024, 3)\\n| extend price = toreal('{PricePerGB}'), srcGBday = toreal('{SourceGBPerDay}')\\n| extend IngestCostForPeriod = round(IngestedGB * price, 2)\\n| extend AggregationSavings = round(AvoidedGB * price, 2)\\n| extend UpstreamFilterSavings = round(iff(srcGBday>0, max_of(srcGBday - IngestedGB, 0.0) * price, 0.0), 2)\\n| project ['Ingested events']=IngestedEvents, ['Raw events represented']=RawEventsRepresented, ['Aggregation ratio (raw:ingested)']=AggregationRatio, ['Ingested GB']=IngestedGB, ['Sentinel cost (period, $)']=IngestCostForPeriod, ['Saved by aggregation/dedupe ($)']=AggregationSavings, ['Saved by upstream filtering ($)']=UpstreamFilterSavings\", \"size\": 1, \"title\": \"Reduction & cost summary\", \"timeContextFromParameter\": \"TimeRange\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"table\", \"gridSettings\": {\"formatters\": [{\"columnMatch\": \"Aggregation ratio (raw:ingested)\", \"formatter\": 8, \"formatOptions\": {\"palette\": \"green\"}}, {\"columnMatch\": \"Saved by aggregation/dedupe ($)\", \"formatter\": 8, \"formatOptions\": {\"palette\": \"greenDark\"}}, {\"columnMatch\": \"Saved by upstream filtering ($)\", \"formatter\": 8, \"formatOptions\": {\"palette\": \"greenDark\"}}]}}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"AbstractEventLogs_CL\\n| extend agg = todouble(coalesce(toreal(AbstractEvent.aggregation_count), 1.0))\\n| summarize ['Raw events represented']=sum(agg), ['Ingested into Sentinel']=count() by bin(TimeGenerated, 1h)\\n| render timechart\", \"size\": 0, \"title\": \"Raw events represented vs. ingested (aggregation/dedupe at work)\", \"timeContextFromParameter\": \"TimeRange\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"timechart\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"AbstractEventLogs_CL\\n| extend product = tostring(AbstractEvent.product), b = todouble(estimate_data_size(AbstractEvent))\\n| summarize IngestedGB = round(sum(b)/1024.0/1024/1024, 4) by product\\n| top 15 by IngestedGB desc\\n| render barchart\", \"size\": 0, \"title\": \"Ingested GB by product (top cost drivers)\", \"timeContextFromParameter\": \"TimeRange\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"barchart\"}}, {\"type\": 1, \"content\": {\"json\": \"### \\ud83e\\uddea Enrichment & effectiveness \\u2014 richer events, upstream\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"AbstractEventLogs_CL\\n| extend e = AbstractEvent\\n| extend risk = toreal(e.risk_score), mr = e.matched_rules, tg = e.tags\\n| summarize Total = count(),\\n    RiskScored = countif(isnotnull(risk) and risk > 0),\\n    RuleMatched = countif(array_length(todynamic(mr)) > 0),\\n    Tagged = countif(array_length(todynamic(tg)) > 0),\\n    EnrichedIdentities = dcountif(tostring(e.identity), isnotempty(tostring(e.identity)))\\n| extend ['% risk-scored'] = round(100.0*RiskScored/Total, 1), ['% rule-matched'] = round(100.0*RuleMatched/Total, 1), ['% tagged'] = round(100.0*Tagged/Total, 1)\\n| project ['Events']=Total, ['% risk-scored'], ['% rule-matched'], ['% tagged'], ['Enriched identities']=EnrichedIdentities\", \"size\": 1, \"title\": \"Enrichment coverage (scored / rule-matched / tagged upstream)\", \"timeContextFromParameter\": \"TimeRange\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"table\", \"gridSettings\": {\"formatters\": [{\"columnMatch\": \"% risk-scored\", \"formatter\": 8, \"formatOptions\": {\"palette\": \"blue\"}}, {\"columnMatch\": \"% rule-matched\", \"formatter\": 8, \"formatOptions\": {\"palette\": \"purple\"}}, {\"columnMatch\": \"% tagged\", \"formatter\": 8, \"formatOptions\": {\"palette\": \"turquoise\"}}]}}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"AbstractEventLogs_CL\\n| extend severity = tostring(AbstractEvent.severity)\\n| summarize Events = count() by severity\\n| render piechart\", \"size\": 0, \"title\": \"Events by severity (post-pipeline)\", \"timeContextFromParameter\": \"TimeRange\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"piechart\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"ASim_AbstractEvent\\n| where isnotempty(AbstractIdentity)\\n| summarize TotalRisk = round(sum(EventRiskScore),1), Events = count(), Products = dcount(EventProduct) by ActorUsername\\n| where TotalRisk > 0\\n| top 10 by TotalRisk desc\\n| render barchart\", \"size\": 0, \"title\": \"Top cumulative-risk identities (cross-product signal Abstract scores upstream)\", \"timeContextFromParameter\": \"TimeRange\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"barchart\"}}, {\"type\": 1, \"content\": {\"json\": \"### \\ud83d\\udee1\\ufe0f Analytics, hunts & AI SOC \\u2014 effectiveness\\nDetections and hunts run over the Abstract-normalized surface; the Verdict playbook (Abstract ASTRO) auto-triages, and Tune-at-source turns a false-positive disposition into an upstream filter \\u2014 *reducing future ingest and future incidents*.\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"SecurityAlert\\n| where AlertName startswith 'Abstract'\\n| summarize Alerts = count() by AlertName, AlertSeverity\\n| render barchart\", \"size\": 0, \"title\": \"Alerts raised by Abstract analytics rules\", \"timeContextFromParameter\": \"TimeRange\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"barchart\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"SecurityIncident\\n| where Title startswith 'Abstract' or Title has 'Abstract'\\n| summarize Incidents = count() by Status, Severity\\n| render barchart\", \"size\": 0, \"title\": \"Abstract-originated incidents by status / severity\", \"timeContextFromParameter\": \"TimeRange\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"barchart\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"SecurityIncident\\n| where Title has 'Abstract'\\n| where Classification in ('FalsePositive','BenignPositive')\\n| summarize FalsePositives = count() by bin(TimeGenerated, 1d)\\n| render timechart\", \"size\": 0, \"title\": \"False-positive dispositions \\u2192 candidates for Tune-at-source (future ingest avoided)\", \"timeContextFromParameter\": \"TimeRange\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"timechart\"}}, {\"type\": 1, \"content\": {\"json\": \"### Why Abstract \\u00d7 Sentinel \\u2014 better together\\n- **Cost**: aggregation, dedupe and upstream filtering cut ingested GB \\u2014 the *aggregation ratio* above is measured directly from `aggregation_count`, and the cost model prices what you avoided.\\n- **Signal**: events arrive pre-enriched and risk-scored, so analytics and hunts fire on higher-fidelity data and identity/IP risk is cross-product \\u2014 a signal the SIEM alone rarely sees.\\n- **AI SOC**: the Verdict playbook auto-triages Abstract insights; Tune-at-source closes the loop by pushing false-positive dispositions back into the pipeline as filters \\u2014 each one permanently lowers future ingest **and** future incident volume.\\n\\n*A SIEM-only or detection-only vendor can't tell this story \\u2014 only a pipeline can act at the source.*\"}}], \"styleSettings\": {}, \"$schema\": \"https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json\"}",
+        "version": "1.0",
+        "category": "sentinel",
+        "sourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspace'))]"
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/metadata",
+      "apiVersion": "2023-04-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/Workbook-e1f2a3b4-5c6d-5e7f-8a9b-0c1d2e3f4a5b')]",
+      "location": "[parameters('workspace-location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/workbooks', guid(parameters('workspace'),'e1f2a3b4-5c6d-5e7f-8a9b-0c1d2e3f4a5b'))]"
+      ],
+      "properties": {
+        "parentId": "[resourceId('Microsoft.Insights/workbooks', guid(parameters('workspace'),'e1f2a3b4-5c6d-5e7f-8a9b-0c1d2e3f4a5b'))]",
+        "contentId": "e1f2a3b4-5c6d-5e7f-8a9b-0c1d2e3f4a5b",
+        "kind": "Workbook",
+        "version": "1.0.0",
+        "source": {
+          "kind": "Solution",
+          "name": "Abstract Security",
+          "sourceId": "ffb59bbb-ab7c-5964-8c86-22d7b5df331b"
+        },
+        "author": {
+          "name": "Abstract Security",
+          "email": "support@abstract.security"
+        },
+        "support": {
+          "name": "Abstract Security",
+          "tier": "Partner",
+          "link": "https://abstract.security"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/workbooks",
+      "apiVersion": "2022-04-01",
+      "name": "[guid(parameters('workspace'),'f2a3b4c5-6d7e-5f8a-9b0c-1d2e3f4a5b6c')]",
+      "location": "[parameters('workspace-location')]",
+      "kind": "shared",
+      "properties": {
+        "displayName": "Abstract Security - Competitive & TCO Command Center",
+        "serializedData": "{\"version\": \"Notebook/1.0\", \"items\": [{\"type\": 1, \"content\": {\"json\": \"# Abstract Composable SIEM \\u00d7 Microsoft Sentinel \\u2014 Total Comparison & Efficiency\\nOne pane for the whole evaluation: **cost & TCO across Sentinel tiers**, **pipeline reduction (raw \\u2192 enriched/aggregated)**, **detections & MITRE coverage**, **incidents, MTTR & MTTD**, and **AI-SOC (ASTRO) insights** \\u2014 live where data exists, modeled where you set the inputs.\\n\\n> Sentinel prices are Microsoft list (East US, verified 2026-07; commitment tiers save up to 52%). Comparative $/% use the parameters below. Capability claims are grounded in Abstract content + Sentinel product facts.\"}}, {\"type\": 9, \"content\": {\"version\": \"KqlParameterItem/1.0\", \"parameters\": [{\"id\": \"t\", \"version\": \"KqlParameterItem/1.0\", \"name\": \"TimeRange\", \"label\": \"Time range\", \"type\": 4, \"isRequired\": true, \"typeSettings\": {\"selectableValues\": [{\"durationMs\": 604800000}, {\"durationMs\": 2592000000}, {\"durationMs\": 7776000000}]}, \"value\": {\"durationMs\": 2592000000}}, {\"id\": \"pa\", \"version\": \"KqlParameterItem/1.0\", \"name\": \"AnalyticsGB\", \"label\": \"Sentinel Analytics $/GB\", \"type\": 1, \"isRequired\": true, \"value\": \"4.30\", \"description\": \"Unified Analytics PAYG (East US).\"}, {\"id\": \"pb\", \"version\": \"KqlParameterItem/1.0\", \"name\": \"BasicGB\", \"label\": \"Basic logs $/GB\", \"type\": 1, \"isRequired\": true, \"value\": \"0.50\"}, {\"id\": \"pd\", \"version\": \"KqlParameterItem/1.0\", \"name\": \"LakeGB\", \"label\": \"Data lake / Auxiliary $/GB\", \"type\": 1, \"isRequired\": true, \"value\": \"0.05\", \"description\": \"Data-lake or Auxiliary ingestion.\"}, {\"id\": \"pr\", \"version\": \"KqlParameterItem/1.0\", \"name\": \"ReductionPct\", \"label\": \"Abstract reduction %\", \"type\": 1, \"isRequired\": true, \"value\": \"70\", \"description\": \"Abstract reports 70\\u201380%.\"}, {\"id\": \"pf\", \"version\": \"KqlParameterItem/1.0\", \"name\": \"FPpct\", \"label\": \"False positives among alerts %\", \"type\": 1, \"isRequired\": true, \"value\": \"40\"}, {\"id\": \"pm\", \"version\": \"KqlParameterItem/1.0\", \"name\": \"MinPerAlert\", \"label\": \"Minutes / triaged alert\", \"type\": 1, \"isRequired\": true, \"value\": \"20\"}, {\"id\": \"prate\", \"version\": \"KqlParameterItem/1.0\", \"name\": \"AnalystRate\", \"label\": \"Analyst $/hour\", \"type\": 1, \"isRequired\": true, \"value\": \"75\"}, {\"id\": \"pdaily\", \"version\": \"KqlParameterItem/1.0\", \"name\": \"SourceGBday\", \"label\": \"Daily source volume GB/day\", \"type\": 1, \"isRequired\": true, \"value\": \"500\", \"description\": \"Volume Abstract sees before reduction.\"}], \"style\": \"pills\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\"}, \"name\": \"parameters\"}, {\"type\": 1, \"content\": {\"json\": \"## \\ud83d\\udcb0 Cost & TCO \\u2014 across Sentinel tiers\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"let src=toreal('{SourceGBday}'); let red=toreal('{ReductionPct}')/100.0;\\nlet pa=toreal('{AnalyticsGB}'); let pd=toreal('{LakeGB}');\\nunion\\n  (print Scenario='Sentinel Analytics \\u2014 all raw', GBday=src, PricePerGB=pa),\\n  (print Scenario='With Abstract \\u2014 kept in Analytics', GBday=src*(1-red), PricePerGB=pa),\\n  (print Scenario='With Abstract \\u2014 full fidelity to data lake', GBday=src, PricePerGB=pd)\\n| extend AnnualUSD = round(GBday*365*PricePerGB, 0)\\n| project Scenario, ['GB/day']=round(GBday,1), ['$/GB']=PricePerGB, ['Annual $']=AnnualUSD\", \"size\": 1, \"title\": \"Annual ingestion cost \\u2014 three postures (Analytics vs Abstract-reduced vs data-lake tier)\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"table\", \"gridSettings\": {\"formatters\": [{\"columnMatch\": \"Annual $\", \"formatter\": 8, \"formatOptions\": {\"palette\": \"redGreen\"}}]}}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"let src=toreal('{SourceGBday}'); let red=toreal('{ReductionPct}')/100.0;\\nlet pa=toreal('{AnalyticsGB}'); let pd=toreal('{LakeGB}');\\nlet curAnnual = src*365*pa;\\nlet withAbstract = src*(1-red)*365*pa + src*red*365*pd;\\nprint ['Sentinel-only annual $']=round(curAnnual,0), ['With Abstract (hot+lake) annual $']=round(withAbstract,0), ['Annual savings $']=round(curAnnual-withAbstract,0), ['3-year savings $']=round((curAnnual-withAbstract)*3,0), ['Reduction %']=toreal('{ReductionPct}')\", \"size\": 4, \"title\": \"Headline TCO \\u2014 route reduced/hot to Analytics, full fidelity to the data lake\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"table\", \"gridSettings\": {\"formatters\": [{\"columnMatch\": \"Annual savings $\", \"formatter\": 8, \"formatOptions\": {\"palette\": \"greenDark\"}}, {\"columnMatch\": \"3-year savings $\", \"formatter\": 8, \"formatOptions\": {\"palette\": \"greenDark\"}}]}}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"Usage\\n| where IsBillable == true\\n| summarize BillableGB = round(sum(Quantity)/1024.0, 3) by DataType\\n| top 15 by BillableGB desc\\n| render barchart\", \"size\": 0, \"title\": \"Your actual billable ingestion by table (Usage)\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"barchart\", \"timeContextFromParameter\": \"TimeRange\"}}, {\"type\": 1, \"content\": {\"json\": \"## \\ud83d\\udd3b Pipeline reduction \\u2014 raw \\u2192 enriched & aggregated\\nMeasured directly from `aggregation_count` on Abstract-delivered events: how many **raw** events each **ingested** record represents. This is the reduction the SIEM bill never sees.\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"AbstractEventLogs_CL\\n| extend agg = todouble(coalesce(toreal(AbstractEvent.aggregation_count),1.0))\\n| summarize ['Raw events represented']=sum(agg), ['Ingested into Sentinel']=count() by bin(TimeGenerated, 1h)\\n| render timechart\", \"size\": 0, \"title\": \"Raw events represented vs. ingested \\u2014 aggregation/dedupe over time\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"timechart\", \"timeContextFromParameter\": \"TimeRange\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"AbstractEventLogs_CL\\n| extend agg=todouble(coalesce(toreal(AbstractEvent.aggregation_count),1.0)), b=todouble(estimate_data_size(AbstractEvent))\\n| summarize Ingested=count(), Raw=sum(agg), Bytes=sum(b)\\n| extend AvgBytes=Bytes/Ingested\\n| extend ['Aggregation ratio']=round(Raw/Ingested,1), ['Ingested GB']=round(Bytes/1024.0/1024/1024,4),\\n         ['Raw GB (est)']=round(Raw*AvgBytes/1024.0/1024/1024,3)\\n| extend ['GB avoided']=round(['Raw GB (est)']-['Ingested GB'],3), ['$ saved @ Analytics']=round((['Raw GB (est)']-['Ingested GB'])*toreal('{AnalyticsGB}'),2)\\n| project ['Ingested events']=Ingested, ['Raw represented']=Raw, ['Aggregation ratio'], ['Ingested GB'], ['Raw GB (est)'], ['GB avoided'], ['$ saved @ Analytics']\", \"size\": 1, \"title\": \"Measured reduction \\u2014 aggregation ratio, GB avoided, $ saved\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"table\", \"timeContextFromParameter\": \"TimeRange\", \"gridSettings\": {\"formatters\": [{\"columnMatch\": \"$ saved @ Analytics\", \"formatter\": 8, \"formatOptions\": {\"palette\": \"greenDark\"}}, {\"columnMatch\": \"Aggregation ratio\", \"formatter\": 8, \"formatOptions\": {\"palette\": \"green\"}}]}}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"AbstractEventLogs_CL\\n| extend e=AbstractEvent\\n| summarize Total=count(), RiskScored=countif(toreal(e.risk_score)>0), Tagged=countif(array_length(todynamic(e.tags))>0),\\n            Identity=countif(isnotempty(tostring(e.identity)))\\n| extend ['% risk-scored']=round(100.0*RiskScored/Total,1), ['% tagged']=round(100.0*Tagged/Total,1), ['% identity-resolved']=round(100.0*Identity/Total,1)\\n| project Total, ['% risk-scored'], ['% tagged'], ['% identity-resolved']\", \"size\": 4, \"title\": \"Enrichment coverage \\u2014 scored / tagged / identity-resolved upstream (OCSF)\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"table\", \"timeContextFromParameter\": \"TimeRange\", \"gridSettings\": {\"formatters\": [{\"columnMatch\": \"% risk-scored\", \"formatter\": 8, \"formatOptions\": {\"palette\": \"blue\"}}, {\"columnMatch\": \"% tagged\", \"formatter\": 8, \"formatOptions\": {\"palette\": \"purple\"}}, {\"columnMatch\": \"% identity-resolved\", \"formatter\": 8, \"formatOptions\": {\"palette\": \"turquoise\"}}]}}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"AbstractEventLogs_CL\\n| extend product=tostring(AbstractEvent.product), agg=todouble(coalesce(toreal(AbstractEvent.aggregation_count),1.0))\\n| summarize Raw=sum(agg), Ingested=count() by product\\n| extend Ratio=round(Raw/Ingested,1)\\n| top 12 by Raw desc\\n| render barchart\", \"size\": 0, \"title\": \"Reduction by product \\u2014 where aggregation pays off most\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"barchart\", \"timeContextFromParameter\": \"TimeRange\"}}, {\"type\": 1, \"content\": {\"json\": \"## \\ud83c\\udfaf Detections & MITRE ATT&CK coverage\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"SecurityAlert\\n| summarize Alerts=count() by AlertName, AlertSeverity\\n| top 15 by Alerts desc\\n| render barchart\", \"size\": 0, \"title\": \"Sentinel alerts by rule / severity (Abstract-normalized data drives these)\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"barchart\", \"timeContextFromParameter\": \"TimeRange\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"AbstractInsights_CL\\n| summarize arg_max(TimeGenerated,*) by InsightId_s\\n| summarize Insights=count() by Severity_s\\n| render piechart\", \"size\": 0, \"title\": \"Live Abstract insights by severity (via API pull connector)\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"piechart\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"AbstractInsights_CL\\n| summarize arg_max(TimeGenerated,*) by InsightId_s\\n| extend m=todynamic(MitreTechniques_s)\\n| mv-expand tech=m\\n| extend Technique=tostring(tech.id)\\n| where isnotempty(Technique)\\n| summarize Insights=count() by Technique\\n| top 12 by Insights desc\\n| render barchart\", \"size\": 0, \"title\": \"Live Abstract insights by MITRE ATT&CK technique\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"barchart\"}}, {\"type\": 1, \"content\": {\"json\": \"## \\u23f1\\ufe0f Incidents, MTTR & MTTD\\nSentinel-native incident metrics. Abstract shrinks these upstream: shift-left detection lowers **MTTD**, auto-triage (ASTRO) lowers **MTTR**, and tune-at-source lowers the **volume** of incidents to work at all.\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"SecurityIncident\\n| summarize Incidents=count() by Severity, Status\\n| render columnchart\", \"size\": 0, \"title\": \"Incidents by severity / status\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"barchart\", \"timeContextFromParameter\": \"TimeRange\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"SecurityIncident\\n| where isnotempty(ClosedTime)\\n| extend TTR = ClosedTime - CreatedTime\\n| summarize ['Avg hrs to resolve']=round(avg(TTR)/1h,2), ['Median hrs']=round(percentile(TTR/1h,50),2), ['Closed']=count()\\n| project ['Avg hrs to resolve'], ['Median hrs'], ['Closed']\", \"size\": 4, \"title\": \"MTTR \\u2014 mean time to resolve (closed incidents)\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"table\", \"timeContextFromParameter\": \"TimeRange\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"// MTTD proxy: lag between the event time (Abstract detected in-stream) and the Sentinel alert firing.\\nSecurityAlert\\n| where AlertName startswith 'Abstract'\\n| extend detectLag = TimeGenerated - todatetime(StartTime)\\n| summarize ['Alerts']=count(), ['Avg SIEM detect lag (min)']=round(avg(detectLag)/1m,1)\\n| extend ['Abstract in-stream detect']='~0.5s (shift-left)'\\n| project Alerts, ['Avg SIEM detect lag (min)'], ['Abstract in-stream detect']\", \"size\": 4, \"title\": \"MTTD \\u2014 SIEM ingest+schedule lag vs. Abstract in-stream detection\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"table\", \"timeContextFromParameter\": \"TimeRange\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"let rate=toreal('{AnalystRate}'); let mins=toreal('{MinPerAlert}'); let fp=toreal('{FPpct}')/100.0;\\nSecurityAlert\\n| summarize Alerts=count()\\n| extend ['FP alerts (modeled)']=round(Alerts*fp,0), ['Analyst hrs on FPs']=round(Alerts*fp*mins/60.0,1),\\n         ['$ reclaimed if auto-triaged']=round(Alerts*fp*mins/60.0*rate,2)\\n| project Alerts, ['FP alerts (modeled)'], ['Analyst hrs on FPs'], ['$ reclaimed if auto-triaged']\", \"size\": 4, \"title\": \"False-positive burden \\u2014 analyst time ASTRO triages away\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"table\", \"timeContextFromParameter\": \"TimeRange\", \"gridSettings\": {\"formatters\": [{\"columnMatch\": \"$ reclaimed if auto-triaged\", \"formatter\": 8, \"formatOptions\": {\"palette\": \"greenDark\"}}]}}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"SecurityIncident\\n| where Classification in ('FalsePositive','BenignPositive')\\n| summarize FPs=count() by bin(TimeGenerated,1d)\\n| render timechart\", \"size\": 0, \"title\": \"False-positive dispositions \\u2192 tune-at-source candidates (permanently lower future ingest + incidents)\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"timechart\", \"timeContextFromParameter\": \"TimeRange\"}}, {\"type\": 1, \"content\": {\"json\": \"## \\ud83e\\udd16 AI-SOC \\u2014 ASTRO\\nASTRO is Abstract's AI security engineer embedded in the platform: agentic triage, investigation and detection-tuning over pipeline-clean data + case context. Insights below arrive decision-ready, not as raw alerts.\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"AbstractInsights_CL\\n| summarize Insights=count(), ['High/Critical']=countif(Severity_s in ('high','critical') or PriorityScore_s in ('high','critical')),\\n            ['Open / in-progress']=countif(Status_s in ('open','in-progress')), ['Distinct techniques']=dcountif(MitreTechniques_s, isnotempty(MitreTechniques_s))\\n| project Insights, ['High/Critical'], ['Open / in-progress'], ['Distinct techniques']\", \"size\": 4, \"title\": \"Live ASTRO insights \\u2014 decision-ready, correlated, MITRE-mapped\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"table\", \"gridSettings\": {\"formatters\": [{\"columnMatch\": \"High/Critical\", \"formatter\": 8, \"formatOptions\": {\"palette\": \"red\"}}]}}}, {\"type\": 1, \"content\": {\"json\": \"## \\ud83e\\uddf0 Pipeline control plane \\u2014 filtering, tune-at-source & schema\\nAbstract's Collection layer shapes data before it lands: filter, dedupe, aggregate, enrich, and **tune noisy patterns at the source** \\u2014 normalized to OCSF across **473 Abstract Common Schema fields** so the same data fits any destination.\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"AbstractTuningFilters_CL\\n| summarize arg_max(TimeGenerated,*) by FilterId_s\\n| project Title=Title_s, AppliedRules=AppliedRuleCount_d, Conditions=ConditionCount_d, Combination=Combination_s\\n| sort by AppliedRules desc\", \"size\": 1, \"title\": \"Active tune-at-source filters (live) \\u2014 each down-samples a pattern upstream (fewer GB + fewer incidents)\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"table\"}}, {\"type\": 3, \"content\": {\"version\": \"KqlItem/1.0\", \"query\": \"// Detect-in-stream vs SIEM: Abstract runs shift-left detections + enrichment on the pipeline; Sentinel runs post-ingest.\\ndatatable(Capability:string, ['Composable SIEM (Abstract)']:string, ['Sentinel']:string)[\\n  'Normalization', 'OCSF / ACS (473 fields), in-stream, once', 'ASIM, post-ingest, per-source',\\n  'Detection', 'In-stream + historical + federated (portable)', 'Scheduled rules over ingested data',\\n  'Reduction', 'Filter / dedupe / aggregate / tune-at-source before ingest', 'Tune rules post-ingest (still billed)',\\n  'Enrichment', 'Identity/asset/geo/TI/OSINT in-stream (100%)', 'Connectors / playbooks post-ingest',\\n  'AI SOC', 'ASTRO embedded (agentic triage/investigation)', 'Copilot add-on, prompt-based' ]\", \"size\": 1, \"title\": \"Detect-in-stream, aggregate, enrich, tune \\u2014 capability at a glance\", \"queryType\": 0, \"resourceType\": \"microsoft.operationalinsights/workspaces\", \"visualization\": \"table\"}}, {\"type\": 1, \"content\": {\"json\": \"## \\ud83e\\udded Capability gap \\u2014 SIEM vs. Composable SIEM\"}}, {\"type\": 1, \"content\": {\"json\": \"| Dimension | Microsoft Sentinel (SIEM) | Abstract Security (Pipeline) | Why it matters |\\n| --- | --- | --- | --- |\\n| **Primary role** | Cloud-native SIEM/SOAR \\u2014 detect, investigate, respond over *ingested* data. | Security data pipeline \\u2014 normalize, enrich, correlate, detect and route *before* ingest (shift-left). | They occupy different layers: a pipeline in front of a SIEM is complementary, not a like-for-like swap. |\\n| **Cost model** | Priced per GB ingested + retention; cost scales with raw volume (unified Analytics ~$4.30/GB PAYG, East US; commitment tiers save up to 52%). | Reduce/aggregate/route before ingest; Abstract reports 70\\u201380% volume reduction (demo here: ~34:1 aggregation, ~99.6% routed off the SIEM). | The SIEM bill is a volume bill. Cutting volume at the source is the largest, most durable cost lever. |\\n| **Volume handling** | Ingests what you send; limited native dedup/aggregation. | Aggregation, dedupe, filtering and down-sampling in-stream (aggregation_count on every record). | Most SIEM volume is repetitive/benign; collapsing it upstream is pure savings + less analyst noise. |\\n| **Storage & retention** | Tiered: Analytics ~$4.30/GB, Basic $0.50/GB, Auxiliary $0.05/GB (+$0.10 processing), and the data lake (GA Oct 2025) ~$0.05/GB ingest + $0.026/GB-mo \\u2014 but tiering + retention are managed inside the SIEM, per source. | LakeVilla full-fidelity cold tier, always query-ready; replay with no rehydration, decided upstream and independent of any SIEM. | Keep everything affordably and still hunt it retroactively \\u2014 and your tiering decision isn't locked to one SIEM's pricing. |\\n| **Normalization** | ASIM, applied post-ingest with per-source parsers. | OCSF + Abstract Common Schema (473 fields), normalized once in-stream before landing. | Normalize-once means the same detections/queries work across any vendor's data. |\\n| **Detections** | Scheduled analytics rules over already-ingested data. | Six shift-left in-stream detections at ~0.5s (verdict fusion, IOC blast-match, beaconing, ATO\\u2194C2, lateral/exfil, campaign clustering). | Detecting before ingest shortens time-to-detect and avoids paying to store what you were going to alert on anyway. |\\n| **Enrichment** | TI/enrichment via connectors + playbooks, post-ingest. | 5-step in-stream enrichment (identity/asset, geo/ASN, TI/AIG, 29+ OSINT adapters, verdict fusion) \\u2014 100% coverage. | Enriched-at-landing data means higher-fidelity detections and less swivel-chair during triage. |\\n| **Identity & entity model** | UEBA add-on; entities scoped per incident. | Cross-source identity/entity graph (10 entity types) with cumulative risk scoring across products. | Cross-product identity risk is a signal a per-incident SIEM view rarely assembles on its own. |\\n| **AI SOC** | Security Copilot \\u2014 a prompt-based assistant (add-on) layered on the SIEM. | ASTRO \\u2014 an AI security engineer embedded in the platform \\u2014 auto-triages, investigates and tunes detections over pipeline data + case context (Verdict, IP Threat Intelligence, and more). | Auto-triage + recommended actions reach the analyst with the case, not after they start digging. |\\n| **Insights vs. raw alerts** | Raw alerts \\u2192 incidents; analysts triage the noise. | Correlated, verdicted insights (finding + context); noise collapsed upstream. | Fewer, richer, decision-ready items lowers alert fatigue and mean-time-to-decision. |\\n| **Noise tuning** | Tune rules post-ingest \\u2014 you still pay to ingest the noise. | rule-tuning-filters down-sample the pattern *upstream* (tune-at-source loop). | A false-positive disposition permanently lowers *future* ingest AND future incidents \\u2014 not just this one. |\\n| **Source & destination agnostic** | Microsoft-centric; strongest with Microsoft sources. | OCSF pipeline routes the same model to Sentinel, Splunk, any SIEM, Event Hub, LakeVilla. | Heterogeneous / M&A estates get one model; destinations become a per-cost choice. |\\n| **Vendor lock-in** | Data + detections live in the SIEM; switching = re-onboarding sources and rewriting content. | Pipeline decouples sources from the SIEM; portable normalization + detections; SIEM is a swappable destination. | Decoupling protects negotiating leverage and makes future platform changes low-risk. |\\n| **SOAR & automation cost** | Logic Apps playbooks bill per action; automation volume scales with incident/alert volume. | Fewer, higher-fidelity insights + upstream tune-at-source mean fewer incidents to automate against. | Cutting incident volume upstream lowers both SIEM ingest AND downstream automation spend. |\\n| **Multi-SIEM / multi-cloud** | One workspace is the destination; multi-SIEM or migration means re-onboarding sources. | Fan out the same normalized events + findings simultaneously \\u2014 Abstract lists Sentinel, Splunk, AWS Security Lake, CrowdStrike NG-SIEM, Elastic, Google SecOps, Cortex XSIAM and SentinelOne as destinations. | Run a bake-off, support M&A/mixed estates, or migrate with no source re-onboarding. |\\n| **Compliance & PII** | Masking/redaction configured post-ingest or via connectors; sensitive data can land before it's handled. | Abstract states PII is detected and redacted in-stream (GDPR/HIPAA/PCI) before data reaches any destination. | Sensitive fields never hit the SIEM in the clear \\u2014 compliance handled upstream, not after landing. |\\n| **Onboarding & upkeep** | Per-source connectors + ASIM parser upkeep as sources and schemas change. | Normalize once to OCSF/ACS upstream; new sources map once and every downstream query still works. | Less parser/rule maintenance as the estate changes \\u2014 engineering time back to the SOC. |\\n| **Deployment relationship** | Terminal destination for data. | Bidirectional: feeds Sentinel (destination) AND reads back via API (verdict, search, tune-at-source). | Transparent two-way integration \\u2014 augment today, rebalance later, on your timeline. |\"}}, {\"type\": 1, \"content\": {\"json\": \"## \\ud83d\\udd00 Augment, optimize, or rebalance\"}}, {\"type\": 1, \"content\": {\"json\": \"**Stage 1 \\u2014 Augment (this solution)** \\u2014 Keep Sentinel exactly as-is. Route Abstract findings + enriched context in via the destination connector; pull insights/verdicts back via the API connector. Immediate fidelity + AI-SOC uplift, zero disruption.\\n\\n**Stage 2 \\u2014 Optimize cost** \\u2014 Send only convictions + supporting context to Sentinel; route full-fidelity telemetry to LakeVilla. Volume-based ingest drops sharply (demo: ~99.6%) while retention/hunt coverage stays complete.\\n\\n**Stage 3 \\u2014 Rebalance / decide** \\u2014 With normalization + detections living in the pipeline, the SIEM becomes a swappable, per-cost destination. Evaluate augment-vs-replace on real numbers \\u2014 using the TCO panels in this solution.\\n\\n\\n**Lean \\u201cbetter together\\u201d when:** \\u2022 Microsoft-heavy estate \\u2014 Defender XDR, Entra, M365 already correlate in Sentinel. \\u2022 Compliance, reporting and IR runbooks are standardized in Sentinel today. \\u2022 The team is fluent in KQL and Sentinel content and wants uplift, not change. \\u2022 Goal is higher fidelity + AI-SOC (ASTRO) + cost relief with zero disruption. \\u2022 You want a fast, reversible win to prove value before any bigger decision.\\n\\n**Lean \\u201cbetter without / rebalance\\u201d when:** \\u2022 SIEM spend is the pain \\u2014 a volume-driven bill growing faster than the security value. \\u2022 Multi-SIEM / multi-cloud / vendor-neutral mandate; avoiding lock-in is strategic. \\u2022 Retention-heavy (long compliance windows) \\u2014 hot-tier-everything doesn't scale. \\u2022 Noisy high-volume sources (firewall, DNS, proxy, flow) dominate ingestion. \\u2022 Migrating off a legacy or over-priced SIEM \\u2014 you want a durable pipeline layer first.\\n\\n\\n**Cited industry signals** (sources in the integration-profile README): **79%** of MITRE ATT&CK techniques enterprise SIEMs miss [1] **83%** of SOC alerts are false positives [2] **67%** of daily alerts go unaddressed [3] **4,484** alerts hit the average SOC per day [4] **14 days** median attacker dwell time [5] **29 min** average eCrime breakout time (fastest 27 sec) [6] **$4.44M** average cost of a data breach \\u2014 241 days to identify + contain [7] **4.8M** global cybersecurity workforce gap [8] **64%** of analysts spend >half their time on manual work [9] **63%** of security pros report burnout [10]\\n\\n\\n**Validate before external claims:** Insights list API endpoint (the pull connector path is parameterized; confirm against your OpenAPI spec).; LakeVilla replay-through-live-detections semantics and retention limits.; Detection-as-code / Sigma authoring format (not documented in this repo).; Stateful cross-stream correlation window + persistent entity store durability.; Licensing, quotas, and Azure Government parity.\"}}, {\"type\": 1, \"content\": {\"json\": \"---\\n*Comparative $/% panels are modeled from your parameters (Sentinel list pricing, East US, verified 2026-07). Live panels read AbstractInsights_CL / AbstractEventLogs_CL. Capability claims grounded in Abstract content + Sentinel product facts; validate current pricing/product before external use.*\"}}], \"styleSettings\": {}, \"$schema\": \"https://github.com/Microsoft/Application-Insights-Workbooks/blob/master/schema/workbook.json\"}",
+        "version": "1.0",
+        "category": "sentinel",
+        "sourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', parameters('workspace'))]"
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/metadata",
+      "apiVersion": "2023-04-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/Workbook-f2a3b4c5-6d7e-5f8a-9b0c-1d2e3f4a5b6c')]",
+      "location": "[parameters('workspace-location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/workbooks', guid(parameters('workspace'),'f2a3b4c5-6d7e-5f8a-9b0c-1d2e3f4a5b6c'))]"
+      ],
+      "properties": {
+        "parentId": "[resourceId('Microsoft.Insights/workbooks', guid(parameters('workspace'),'f2a3b4c5-6d7e-5f8a-9b0c-1d2e3f4a5b6c'))]",
+        "contentId": "f2a3b4c5-6d7e-5f8a-9b0c-1d2e3f4a5b6c",
+        "kind": "Workbook",
+        "version": "1.0.0",
+        "source": {
+          "kind": "Solution",
+          "name": "Abstract Security",
+          "sourceId": "ffb59bbb-ab7c-5964-8c86-22d7b5df331b"
+        },
+        "author": {
+          "name": "Abstract Security",
+          "email": "support@abstract.security"
+        },
+        "support": {
+          "name": "Abstract Security",
+          "tier": "Partner",
+          "link": "https://abstract.security"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2021-04-01",
+      "name": "abstract-playbook-enrich",
+      "properties": {
+        "mode": "Incremental",
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "PlaybookName": {
+              "type": "string",
+              "defaultValue": "Abstract-Enrich-Incident"
+            },
+            "abstractBaseUrl": {
+              "type": "string",
+              "defaultValue": "https://api.abstractsecurity.app"
+            },
+            "abstractVendorAccountId": {
+              "type": "string",
+              "metadata": {
+                "description": "Abstract vendor account id (x-as-vendor-account-id)."
+              }
+            },
+            "lookbackHours": {
+              "type": "int",
+              "defaultValue": 24
+            },
+            "keyVaultSecretUri": {
+              "type": "string",
+              "metadata": {
+                "description": "Key Vault secret URI for the Abstract API key (incl. ?api-version). Fetched at runtime via the playbook's managed identity."
+              }
+            }
+          },
+          "variables": {
+            "AzureSentinelConnectionName": "[concat('azuresentinel-', parameters('PlaybookName'))]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Web/connections",
+              "apiVersion": "2016-06-01",
+              "name": "[variables('AzureSentinelConnectionName')]",
+              "location": "[resourceGroup().location]",
+              "kind": "V1",
+              "properties": {
+                "displayName": "[variables('AzureSentinelConnectionName')]",
+                "customParameterValues": {},
+                "parameterValueType": "Alternative",
+                "api": {
+                  "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/azuresentinel')]"
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Logic/workflows",
+              "apiVersion": "2017-07-01",
+              "name": "[parameters('PlaybookName')]",
+              "location": "[resourceGroup().location]",
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/connections', variables('AzureSentinelConnectionName'))]"
+              ],
+              "properties": {
+                "state": "Enabled",
+                "definition": {
+                  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                  "contentVersion": "1.0.0.0",
+                  "parameters": {
+                    "$connections": {
+                      "type": "Object"
+                    },
+                    "abstractBaseUrl": {
+                      "type": "string"
+                    },
+                    "abstractVendorAccountId": {
+                      "type": "string"
+                    },
+                    "lookbackHours": {
+                      "type": "int"
+                    },
+                    "keyVaultSecretUri": {
+                      "type": "string"
+                    }
+                  },
+                  "triggers": {
+                    "Microsoft_Sentinel_incident": {
+                      "type": "ApiConnectionWebhook",
+                      "inputs": {
+                        "body": {
+                          "callback_url": "@{listCallbackUrl()}"
+                        },
+                        "host": {
+                          "connection": {
+                            "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                          }
+                        },
+                        "path": "/incident-creation"
+                      }
+                    }
+                  },
+                  "actions": {
+                    "Compute_window": {
+                      "type": "Compose",
+                      "inputs": {
+                        "start_time": "@{addHours(utcNow(), mul(parameters('lookbackHours'), -1))}",
+                        "end_time": "@{utcNow()}"
+                      },
+                      "runAfter": {
+                        "Get_Abstract_key": [
+                          "Succeeded"
+                        ]
+                      }
+                    },
+                    "Search_Abstract_events": {
+                      "runAfter": {
+                        "Compute_window": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "Http",
+                      "runtimeConfiguration": {
+                        "secureData": {
+                          "properties": [
+                            "inputs"
+                          ]
+                        }
+                      },
+                      "inputs": {
+                        "method": "POST",
+                        "uri": "@{parameters('abstractBaseUrl')}/v1/streamviewer/search",
+                        "headers": {
+                          "Authorization": "Bearer @{body('Get_Abstract_key')?['value']}",
+                          "x-as-vendor-account-id": "@parameters('abstractVendorAccountId')",
+                          "Content-Type": "application/json"
+                        },
+                        "body": {
+                          "vendor_account_id": "@parameters('abstractVendorAccountId')",
+                          "page_size": 25,
+                          "selected_fields": [
+                            "id",
+                            "@@timestamp",
+                            "severity",
+                            "product",
+                            "vendor",
+                            "message",
+                            "source_ipv4",
+                            "dest_ipv4",
+                            "user_name"
+                          ],
+                          "start_time": "@{outputs('Compute_window')['start_time']}",
+                          "end_time": "@{outputs('Compute_window')['end_time']}"
+                        }
+                      }
+                    },
+                    "Add_comment_to_incident": {
+                      "runAfter": {
+                        "Search_Abstract_events": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "ApiConnection",
+                      "inputs": {
+                        "host": {
+                          "connection": {
+                            "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                          }
+                        },
+                        "method": "post",
+                        "path": "/Incidents/Comment",
+                        "body": {
+                          "incidentArmId": "@triggerBody()?['object']?['id']",
+                          "message": "<h3>Abstract Security \u2014 related pipeline events (last @{parameters('lookbackHours')}h)</h3><p>Returned <b>@{length(coalesce(body('Search_Abstract_events')?['events'], json('[]')))}</b> events from the Abstract pipeline. Top matches:</p><pre>@{substring(string(coalesce(body('Search_Abstract_events')?['events'], json('[]'))), 0, min(2800, length(string(coalesce(body('Search_Abstract_events')?['events'], json('[]'))))))}</pre>"
+                        }
+                      }
+                    },
+                    "Get_Abstract_key": {
+                      "type": "Http",
+                      "runtimeConfiguration": {
+                        "secureData": {
+                          "properties": [
+                            "outputs"
+                          ]
+                        }
+                      },
+                      "inputs": {
+                        "method": "GET",
+                        "uri": "@{parameters('keyVaultSecretUri')}",
+                        "authentication": {
+                          "type": "ManagedServiceIdentity",
+                          "audience": "https://vault.azure.net"
+                        }
+                      },
+                      "runAfter": {}
+                    }
+                  }
+                },
+                "parameters": {
+                  "$connections": {
+                    "value": {
+                      "azuresentinel": {
+                        "connectionId": "[resourceId('Microsoft.Web/connections', variables('AzureSentinelConnectionName'))]",
+                        "connectionName": "[variables('AzureSentinelConnectionName')]",
+                        "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/azuresentinel')]",
+                        "connectionProperties": {
+                          "authentication": {
+                            "type": "ManagedServiceIdentity"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "abstractBaseUrl": {
+                    "value": "[parameters('abstractBaseUrl')]"
+                  },
+                  "abstractVendorAccountId": {
+                    "value": "[parameters('abstractVendorAccountId')]"
+                  },
+                  "lookbackHours": {
+                    "value": "[parameters('lookbackHours')]"
+                  },
+                  "keyVaultSecretUri": {
+                    "value": "[parameters('keyVaultSecretUri')]"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "parameters": {
+          "PlaybookName": {
+            "value": "Abstract-Enrich-Incident"
+          },
+          "abstractBaseUrl": {
+            "value": "[parameters('abstractBaseUrl')]"
+          },
+          "abstractVendorAccountId": {
+            "value": "[parameters('abstractVendorAccountId')]"
+          },
+          "keyVaultSecretUri": {
+            "value": "[parameters('keyVaultSecretUri')]"
+          },
+          "lookbackHours": {
+            "value": "[parameters('lookbackHours')]"
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/metadata",
+      "apiVersion": "2023-04-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/Playbook-1f0e6a41-2b7c-5c8d-9e10-a1b2c3d4e5f6')]",
+      "location": "[parameters('workspace-location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'abstract-playbook-enrich')]"
+      ],
+      "properties": {
+        "parentId": "[resourceId('Microsoft.Logic/workflows', 'Abstract-Enrich-Incident')]",
+        "contentId": "1f0e6a41-2b7c-5c8d-9e10-a1b2c3d4e5f6",
+        "kind": "Playbook",
+        "version": "1.0.0",
+        "source": {
+          "kind": "Solution",
+          "name": "Abstract Security",
+          "sourceId": "ffb59bbb-ab7c-5964-8c86-22d7b5df331b"
+        },
+        "author": {
+          "name": "Abstract Security",
+          "email": "support@abstract.security"
+        },
+        "support": {
+          "name": "Abstract Security",
+          "tier": "Partner",
+          "link": "https://abstract.security"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2021-04-01",
+      "name": "abstract-playbook-verdict",
+      "properties": {
+        "mode": "Incremental",
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "PlaybookName": {
+              "type": "string",
+              "defaultValue": "Abstract-Verdict"
+            },
+            "abstractBaseUrl": {
+              "type": "string",
+              "defaultValue": "https://api.abstractsecurity.app"
+            },
+            "abstractVendorAccountId": {
+              "type": "string"
+            },
+            "keyVaultSecretUri": {
+              "type": "string",
+              "metadata": {
+                "description": "Key Vault secret URI for the Abstract API key (incl. ?api-version). Fetched at runtime via the playbook's managed identity."
+              }
+            }
+          },
+          "variables": {
+            "AzureSentinelConnectionName": "[concat('azuresentinel-', parameters('PlaybookName'))]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Web/connections",
+              "apiVersion": "2016-06-01",
+              "name": "[variables('AzureSentinelConnectionName')]",
+              "location": "[resourceGroup().location]",
+              "kind": "V1",
+              "properties": {
+                "displayName": "[variables('AzureSentinelConnectionName')]",
+                "customParameterValues": {},
+                "parameterValueType": "Alternative",
+                "api": {
+                  "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/azuresentinel')]"
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Logic/workflows",
+              "apiVersion": "2017-07-01",
+              "name": "[parameters('PlaybookName')]",
+              "location": "[resourceGroup().location]",
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/connections', variables('AzureSentinelConnectionName'))]"
+              ],
+              "properties": {
+                "state": "Enabled",
+                "definition": {
+                  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                  "contentVersion": "1.0.0.0",
+                  "parameters": {
+                    "$connections": {
+                      "type": "Object"
+                    },
+                    "abstractBaseUrl": {
+                      "type": "string"
+                    },
+                    "abstractVendorAccountId": {
+                      "type": "string"
+                    },
+                    "keyVaultSecretUri": {
+                      "type": "string"
+                    }
+                  },
+                  "triggers": {
+                    "Microsoft_Sentinel_incident": {
+                      "type": "ApiConnectionWebhook",
+                      "inputs": {
+                        "body": {
+                          "callback_url": "@{listCallbackUrl()}"
+                        },
+                        "host": {
+                          "connection": {
+                            "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                          }
+                        },
+                        "path": "/incident-creation"
+                      }
+                    }
+                  },
+                  "actions": {
+                    "Get_Abstract_insight_id": {
+                      "type": "Compose",
+                      "inputs": "@coalesce(triggerBody()?['object']?['properties']?['additionalData']?['customDetails']?['AbstractInsightId'], '')",
+                      "runAfter": {
+                        "Get_Abstract_key": [
+                          "Succeeded"
+                        ]
+                      }
+                    },
+                    "Has_insight_id": {
+                      "runAfter": {
+                        "Get_Abstract_insight_id": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "If",
+                      "expression": {
+                        "not": {
+                          "equals": [
+                            "@outputs('Get_Abstract_insight_id')",
+                            ""
+                          ]
+                        }
+                      },
+                      "actions": {
+                        "Start_verdict_workflow": {
+                          "type": "Http",
+                          "runtimeConfiguration": {
+                            "secureData": {
+                              "properties": [
+                                "inputs"
+                              ]
+                            }
+                          },
+                          "inputs": {
+                            "method": "POST",
+                            "uri": "@{parameters('abstractBaseUrl')}/v1/ase/workflows/verdict",
+                            "headers": {
+                              "Authorization": "Bearer @{body('Get_Abstract_key')?['value']}",
+                              "x-as-vendor-account-id": "@parameters('abstractVendorAccountId')",
+                              "Content-Type": "application/json"
+                            },
+                            "body": {
+                              "insight_id": "@outputs('Get_Abstract_insight_id')"
+                            }
+                          }
+                        },
+                        "Poll_until_complete": {
+                          "runAfter": {
+                            "Start_verdict_workflow": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "Until",
+                          "expression": "@not(empty(coalesce(body('Get_verdict_status')?['verdict'], '')))",
+                          "limit": {
+                            "count": 30,
+                            "timeout": "PT10M"
+                          },
+                          "actions": {
+                            "Delay_10s": {
+                              "type": "Wait",
+                              "inputs": {
+                                "interval": {
+                                  "count": 10,
+                                  "unit": "Second"
+                                }
+                              }
+                            },
+                            "Get_verdict_status": {
+                              "runAfter": {
+                                "Delay_10s": [
+                                  "Succeeded"
+                                ]
+                              },
+                              "type": "Http",
+                              "runtimeConfiguration": {
+                                "secureData": {
+                                  "properties": [
+                                    "inputs"
+                                  ]
+                                }
+                              },
+                              "inputs": {
+                                "method": "GET",
+                                "uri": "@{parameters('abstractBaseUrl')}/v1/ase/workflows/verdict/@{body('Start_verdict_workflow')?['task_id']}",
+                                "headers": {
+                                  "Authorization": "Bearer @{body('Get_Abstract_key')?['value']}",
+                                  "x-as-vendor-account-id": "@parameters('abstractVendorAccountId')"
+                                }
+                              }
+                            }
+                          }
+                        },
+                        "Comment_verdict": {
+                          "runAfter": {
+                            "Poll_until_complete": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "ApiConnection",
+                          "inputs": {
+                            "host": {
+                              "connection": {
+                                "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                              }
+                            },
+                            "method": "post",
+                            "path": "/Incidents/Comment",
+                            "body": {
+                              "incidentArmId": "@triggerBody()?['object']?['id']",
+                              "message": "<h3>Abstract ASTRO \u2014 Verdict</h3><p><b>Verdict:</b> @{coalesce(body('Get_verdict_status')?['verdict'], 'UNKNOWN')} &nbsp; <b>Confidence:</b> @{coalesce(body('Get_verdict_status')?['confidence'], 0)}%</p><p>@{coalesce(body('Get_verdict_status')?['summary'], 'No summary returned.')}</p><p><b>Recommended actions:</b></p><pre>@{string(coalesce(body('Get_verdict_status')?['recommended_actions'], json('[]')))}</pre><p><i>Events analyzed: @{coalesce(body('Get_verdict_status')?['total_events_analyzed'], 0)} \u00b7 IOCs enriched: @{coalesce(body('Get_verdict_status')?['iocs_enriched'], 0)}</i></p>"
+                            }
+                          }
+                        },
+                        "If_malicious_raise_severity": {
+                          "runAfter": {
+                            "Comment_verdict": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "If",
+                          "expression": {
+                            "equals": [
+                              "@coalesce(body('Get_verdict_status')?['verdict'], '')",
+                              "MALICIOUS"
+                            ]
+                          },
+                          "actions": {
+                            "Update_incident_severity": {
+                              "type": "ApiConnection",
+                              "inputs": {
+                                "host": {
+                                  "connection": {
+                                    "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                  }
+                                },
+                                "method": "put",
+                                "path": "/Incidents",
+                                "body": {
+                                  "incidentArmId": "@triggerBody()?['object']?['id']",
+                                  "severity": "High",
+                                  "status": "Active"
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "else": {
+                        "actions": {
+                          "Comment_no_mapping": {
+                            "type": "ApiConnection",
+                            "inputs": {
+                              "host": {
+                                "connection": {
+                                  "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                }
+                              },
+                              "method": "post",
+                              "path": "/Incidents/Comment",
+                              "body": {
+                                "incidentArmId": "@triggerBody()?['object']?['id']",
+                                "message": "Abstract Verdict playbook ran, but no <code>AbstractInsightId</code> custom detail was found on this incident. Map it on the originating analytics rule to enable agentic verdicts."
+                              }
+                            }
+                          }
+                        }
+                      }
+                    },
+                    "Get_Abstract_key": {
+                      "type": "Http",
+                      "runtimeConfiguration": {
+                        "secureData": {
+                          "properties": [
+                            "outputs"
+                          ]
+                        }
+                      },
+                      "inputs": {
+                        "method": "GET",
+                        "uri": "@{parameters('keyVaultSecretUri')}",
+                        "authentication": {
+                          "type": "ManagedServiceIdentity",
+                          "audience": "https://vault.azure.net"
+                        }
+                      },
+                      "runAfter": {}
+                    }
+                  }
+                },
+                "parameters": {
+                  "$connections": {
+                    "value": {
+                      "azuresentinel": {
+                        "connectionId": "[resourceId('Microsoft.Web/connections', variables('AzureSentinelConnectionName'))]",
+                        "connectionName": "[variables('AzureSentinelConnectionName')]",
+                        "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/azuresentinel')]",
+                        "connectionProperties": {
+                          "authentication": {
+                            "type": "ManagedServiceIdentity"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "abstractBaseUrl": {
+                    "value": "[parameters('abstractBaseUrl')]"
+                  },
+                  "abstractVendorAccountId": {
+                    "value": "[parameters('abstractVendorAccountId')]"
+                  },
+                  "keyVaultSecretUri": {
+                    "value": "[parameters('keyVaultSecretUri')]"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "parameters": {
+          "PlaybookName": {
+            "value": "Abstract-Verdict"
+          },
+          "abstractBaseUrl": {
+            "value": "[parameters('abstractBaseUrl')]"
+          },
+          "abstractVendorAccountId": {
+            "value": "[parameters('abstractVendorAccountId')]"
+          },
+          "keyVaultSecretUri": {
+            "value": "[parameters('keyVaultSecretUri')]"
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/metadata",
+      "apiVersion": "2023-04-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/Playbook-2a1b7c52-3c8d-5d9e-af21-b2c3d4e5f607')]",
+      "location": "[parameters('workspace-location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'abstract-playbook-verdict')]"
+      ],
+      "properties": {
+        "parentId": "[resourceId('Microsoft.Logic/workflows', 'Abstract-Verdict')]",
+        "contentId": "2a1b7c52-3c8d-5d9e-af21-b2c3d4e5f607",
+        "kind": "Playbook",
+        "version": "1.0.0",
+        "source": {
+          "kind": "Solution",
+          "name": "Abstract Security",
+          "sourceId": "ffb59bbb-ab7c-5964-8c86-22d7b5df331b"
+        },
+        "author": {
+          "name": "Abstract Security",
+          "email": "support@abstract.security"
+        },
+        "support": {
+          "name": "Abstract Security",
+          "tier": "Partner",
+          "link": "https://abstract.security"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Resources/deployments",
+      "apiVersion": "2021-04-01",
+      "name": "abstract-playbook-tune",
+      "properties": {
+        "mode": "Incremental",
+        "expressionEvaluationOptions": {
+          "scope": "inner"
+        },
+        "template": {
+          "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+          "contentVersion": "1.0.0.0",
+          "parameters": {
+            "PlaybookName": {
+              "type": "string",
+              "defaultValue": "Abstract-Tune-At-Source"
+            },
+            "abstractBaseUrl": {
+              "type": "string",
+              "defaultValue": "https://api.abstractsecurity.app"
+            },
+            "abstractVendorAccountId": {
+              "type": "string"
+            },
+            "keyVaultSecretUri": {
+              "type": "string",
+              "metadata": {
+                "description": "Key Vault secret URI for the Abstract API key (incl. ?api-version). Fetched at runtime via the playbook's managed identity."
+              }
+            }
+          },
+          "variables": {
+            "AzureSentinelConnectionName": "[concat('azuresentinel-', parameters('PlaybookName'))]"
+          },
+          "resources": [
+            {
+              "type": "Microsoft.Web/connections",
+              "apiVersion": "2016-06-01",
+              "name": "[variables('AzureSentinelConnectionName')]",
+              "location": "[resourceGroup().location]",
+              "kind": "V1",
+              "properties": {
+                "displayName": "[variables('AzureSentinelConnectionName')]",
+                "customParameterValues": {},
+                "parameterValueType": "Alternative",
+                "api": {
+                  "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/azuresentinel')]"
+                }
+              }
+            },
+            {
+              "type": "Microsoft.Logic/workflows",
+              "apiVersion": "2017-07-01",
+              "name": "[parameters('PlaybookName')]",
+              "location": "[resourceGroup().location]",
+              "identity": {
+                "type": "SystemAssigned"
+              },
+              "dependsOn": [
+                "[resourceId('Microsoft.Web/connections', variables('AzureSentinelConnectionName'))]"
+              ],
+              "properties": {
+                "state": "Enabled",
+                "definition": {
+                  "$schema": "https://schema.management.azure.com/providers/Microsoft.Logic/schemas/2016-06-01/workflowdefinition.json#",
+                  "contentVersion": "1.0.0.0",
+                  "parameters": {
+                    "$connections": {
+                      "type": "Object"
+                    },
+                    "abstractBaseUrl": {
+                      "type": "string"
+                    },
+                    "abstractVendorAccountId": {
+                      "type": "string"
+                    },
+                    "keyVaultSecretUri": {
+                      "type": "string"
+                    }
+                  },
+                  "triggers": {
+                    "Microsoft_Sentinel_incident": {
+                      "type": "ApiConnectionWebhook",
+                      "inputs": {
+                        "body": {
+                          "callback_url": "@{listCallbackUrl()}"
+                        },
+                        "host": {
+                          "connection": {
+                            "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                          }
+                        },
+                        "path": "/incident-creation"
+                      }
+                    }
+                  },
+                  "actions": {
+                    "Read_classification": {
+                      "type": "Compose",
+                      "inputs": "@coalesce(triggerBody()?['object']?['properties']?['classification'], '')",
+                      "runAfter": {
+                        "Get_Abstract_key": [
+                          "Succeeded"
+                        ]
+                      }
+                    },
+                    "Is_false_positive": {
+                      "runAfter": {
+                        "Read_classification": [
+                          "Succeeded"
+                        ]
+                      },
+                      "type": "If",
+                      "expression": {
+                        "or": [
+                          {
+                            "equals": [
+                              "@outputs('Read_classification')",
+                              "FalsePositive"
+                            ]
+                          },
+                          {
+                            "equals": [
+                              "@outputs('Read_classification')",
+                              "BenignPositive"
+                            ]
+                          }
+                        ]
+                      },
+                      "actions": {
+                        "Get_source_ip": {
+                          "type": "Compose",
+                          "inputs": "@coalesce(triggerBody()?['object']?['properties']?['additionalData']?['customDetails']?['SrcIpAddr'], '')"
+                        },
+                        "Has_source_ip": {
+                          "runAfter": {
+                            "Get_source_ip": [
+                              "Succeeded"
+                            ]
+                          },
+                          "type": "If",
+                          "expression": {
+                            "not": {
+                              "equals": [
+                                "@outputs('Get_source_ip')",
+                                ""
+                              ]
+                            }
+                          },
+                          "actions": {
+                            "Compose_tuning_filter": {
+                              "type": "Compose",
+                              "inputs": {
+                                "title": "@{concat('Sentinel FP \u2014 incident #', string(coalesce(triggerBody()?['object']?['properties']?['incidentNumber'], 0)), ' (', coalesce(triggerBody()?['object']?['properties']?['additionalData']?['customDetails']?['EventProduct'], 'abstract'), ')')}",
+                                "tuning_filter_combination": {
+                                  "operator": "and",
+                                  "source": "sentinel-disposition",
+                                  "abstract_insight_id": "@{coalesce(triggerBody()?['object']?['properties']?['additionalData']?['customDetails']?['AbstractInsightId'], '')}",
+                                  "conditions": [
+                                    {
+                                      "field": "source_ipv4",
+                                      "field_type": "Ipv4",
+                                      "operation": "EQUALS",
+                                      "value": "@outputs('Get_source_ip')"
+                                    }
+                                  ]
+                                }
+                              }
+                            },
+                            "Create_tuning_filter": {
+                              "runAfter": {
+                                "Compose_tuning_filter": [
+                                  "Succeeded"
+                                ]
+                              },
+                              "type": "Http",
+                              "runtimeConfiguration": {
+                                "secureData": {
+                                  "properties": [
+                                    "inputs"
+                                  ]
+                                }
+                              },
+                              "inputs": {
+                                "method": "POST",
+                                "uri": "@{parameters('abstractBaseUrl')}/v2/rule-tuning-filters/",
+                                "headers": {
+                                  "Authorization": "Bearer @{body('Get_Abstract_key')?['value']}",
+                                  "x-as-vendor-account-id": "@parameters('abstractVendorAccountId')",
+                                  "Content-Type": "application/json"
+                                },
+                                "body": "@outputs('Compose_tuning_filter')"
+                              }
+                            },
+                            "Comment_result": {
+                              "runAfter": {
+                                "Create_tuning_filter": [
+                                  "Succeeded",
+                                  "Failed"
+                                ]
+                              },
+                              "type": "ApiConnection",
+                              "inputs": {
+                                "host": {
+                                  "connection": {
+                                    "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                  }
+                                },
+                                "method": "post",
+                                "path": "/Incidents/Comment",
+                                "body": {
+                                  "incidentArmId": "@triggerBody()?['object']?['id']",
+                                  "message": "<h3>Abstract \u2014 tuned at source</h3><p>Incident classified <b>@{outputs('Read_classification')}</b>. Created an Abstract rule tuning filter so this pattern is down-sampled upstream (fewer ingested GB + fewer future incidents).</p><p><b>Source IP:</b> @{outputs('Get_source_ip')} &nbsp; <b>Tuning filter:</b> @{coalesce(body('Create_tuning_filter')?['nanoid'], body('Create_tuning_filter')?['title'], 'see Abstract')}</p>"
+                                }
+                              }
+                            }
+                          },
+                          "else": {
+                            "actions": {
+                              "Comment_no_ip": {
+                                "type": "ApiConnection",
+                                "inputs": {
+                                  "host": {
+                                    "connection": {
+                                      "name": "@parameters('$connections')['azuresentinel']['connectionId']"
+                                    }
+                                  },
+                                  "method": "post",
+                                  "path": "/Incidents/Comment",
+                                  "body": {
+                                    "incidentArmId": "@triggerBody()?['object']?['id']",
+                                    "message": "Abstract Tune-at-source ran (incident classified <b>@{outputs('Read_classification')}</b>) but found no <code>SrcIpAddr</code> custom detail to build a precise tuning filter. Map SrcIpAddr on the originating analytics rule, or tune manually in Abstract."
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "else": {
+                        "actions": {}
+                      }
+                    },
+                    "Get_Abstract_key": {
+                      "type": "Http",
+                      "runtimeConfiguration": {
+                        "secureData": {
+                          "properties": [
+                            "outputs"
+                          ]
+                        }
+                      },
+                      "inputs": {
+                        "method": "GET",
+                        "uri": "@{parameters('keyVaultSecretUri')}",
+                        "authentication": {
+                          "type": "ManagedServiceIdentity",
+                          "audience": "https://vault.azure.net"
+                        }
+                      },
+                      "runAfter": {}
+                    }
+                  }
+                },
+                "parameters": {
+                  "$connections": {
+                    "value": {
+                      "azuresentinel": {
+                        "connectionId": "[resourceId('Microsoft.Web/connections', variables('AzureSentinelConnectionName'))]",
+                        "connectionName": "[variables('AzureSentinelConnectionName')]",
+                        "id": "[concat('/subscriptions/', subscription().subscriptionId, '/providers/Microsoft.Web/locations/', resourceGroup().location, '/managedApis/azuresentinel')]",
+                        "connectionProperties": {
+                          "authentication": {
+                            "type": "ManagedServiceIdentity"
+                          }
+                        }
+                      }
+                    }
+                  },
+                  "abstractBaseUrl": {
+                    "value": "[parameters('abstractBaseUrl')]"
+                  },
+                  "abstractVendorAccountId": {
+                    "value": "[parameters('abstractVendorAccountId')]"
+                  },
+                  "keyVaultSecretUri": {
+                    "value": "[parameters('keyVaultSecretUri')]"
+                  }
+                }
+              }
+            }
+          ]
+        },
+        "parameters": {
+          "PlaybookName": {
+            "value": "Abstract-Tune-At-Source"
+          },
+          "abstractBaseUrl": {
+            "value": "[parameters('abstractBaseUrl')]"
+          },
+          "abstractVendorAccountId": {
+            "value": "[parameters('abstractVendorAccountId')]"
+          },
+          "keyVaultSecretUri": {
+            "value": "[parameters('keyVaultSecretUri')]"
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/metadata",
+      "apiVersion": "2023-04-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/Playbook-3b2c8d63-4d9e-5eaf-b032-c3d4e5f60718')]",
+      "location": "[parameters('workspace-location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'abstract-playbook-tune')]"
+      ],
+      "properties": {
+        "parentId": "[resourceId('Microsoft.Logic/workflows', 'Abstract-Tune-At-Source')]",
+        "contentId": "3b2c8d63-4d9e-5eaf-b032-c3d4e5f60718",
+        "kind": "Playbook",
+        "version": "1.0.0",
+        "source": {
+          "kind": "Solution",
+          "name": "Abstract Security",
+          "sourceId": "ffb59bbb-ab7c-5964-8c86-22d7b5df331b"
+        },
+        "author": {
+          "name": "Abstract Security",
+          "email": "support@abstract.security"
+        },
+        "support": {
+          "name": "Abstract Security",
+          "tier": "Partner",
+          "link": "https://abstract.security"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/dataConnectorDefinitions",
+      "apiVersion": "2022-09-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/AbstractSecurityInsightsAPI')]",
+      "location": "[parameters('workspace-location')]",
+      "kind": "Customizable",
+      "properties": {
+        "connectorUiConfig": {
+          "id": "AbstractSecurityInsightsAPI",
+          "title": "Abstract Security \u2014 Insights & Detections (API)",
+          "publisher": "Abstract Security",
+          "logo": "[parameters('logoUrl')]",
+          "descriptionMarkdown": "Pulls **Abstract insights, ASTRO verdicts, tune-at-source filters and pipeline metrics** into Sentinel via the Abstract API \u2014 so you get Abstract's higher-order signal **even when Sentinel is not the raw-telemetry destination**. Powers the Competitive & TCO Command Center. Deploy the Abstract API Sync Logic App (below) to populate `AbstractInsights_CL`.",
+          "graphQueriesTableName": "AbstractInsights_CL",
+          "graphQueries": [
+            {
+              "metricName": "Abstract insights received",
+              "legend": "AbstractInsights_CL",
+              "baseQuery": "AbstractInsights_CL"
+            }
+          ],
+          "sampleQueries": [
+            {
+              "description": "Insights by severity",
+              "query": "AbstractInsights_CL\n| summarize count() by Severity_s"
+            },
+            {
+              "description": "Insights by MITRE technique",
+              "query": "AbstractInsights_CL\n| where isnotempty(MitreTechniques_s)\n| mv-expand t=split(MitreTechniques_s, ',')\n| summarize count() by tostring(t)"
+            }
+          ],
+          "dataTypes": [
+            {
+              "name": "AbstractInsights_CL",
+              "lastDataReceivedQuery": "AbstractInsights_CL\n| summarize Time = max(TimeGenerated)\n| where isnotempty(Time)"
+            }
+          ],
+          "connectivityCriteria": [
+            {
+              "type": "HasDataConnectors"
+            },
+            {
+              "type": "IsConnectedQuery",
+              "value": [
+                "AbstractInsights_CL\n| summarize LastLogReceived = max(TimeGenerated)\n| project IsConnected = LastLogReceived > ago(3d)"
+              ]
+            }
+          ],
+          "availability": {
+            "isPreview": true
+          },
+          "permissions": {
+            "resourceProvider": [
+              {
+                "provider": "Microsoft.OperationalInsights/workspaces",
+                "permissionsDisplayText": "read and write permissions are required.",
+                "providerDisplayName": "Workspace",
+                "scope": "Workspace",
+                "requiredPermissions": {
+                  "read": true,
+                  "write": true,
+                  "delete": true
+                }
+              }
+            ],
+            "customs": [
+              {
+                "name": "Abstract API key",
+                "description": "An Abstract Security API key + vendor account id (stored as a securestring / Key Vault reference)."
+              }
+            ]
+          },
+          "instructionSteps": [
+            {
+              "title": "1. Deploy the Abstract API Sync Logic App",
+              "description": "Deploy `solution/connector/abstract-api-sync.json` (or `abstract-insights-pull.json`) with your Abstract API key + vendor id. It writes AbstractInsights_CL, AbstractTuningFilters_CL, AbstractPipelineMetrics_CL and AbstractDetectionEffectiveness_CL."
+            },
+            {
+              "title": "2. Confirm delivery",
+              "description": "Within the poll interval the graph above turns green as Abstract insights land in AbstractInsights_CL."
+            },
+            {
+              "title": "3. Open the Competitive & TCO Command Center",
+              "description": "The workbook's live panels light up with real insights, MITRE coverage, and tune-at-source filters."
+            }
+          ]
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/metadata",
+      "apiVersion": "2023-04-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/DataConnector-b1c2d3e4-5f60-5a7b-8c9d-0e1f2a3b4c5d')]",
+      "location": "[parameters('workspace-location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/providers/dataConnectorDefinitions', parameters('workspace'),'Microsoft.SecurityInsights','AbstractSecurityInsightsAPI')]"
+      ],
+      "properties": {
+        "parentId": "[resourceId('Microsoft.OperationalInsights/workspaces/providers/dataConnectorDefinitions', parameters('workspace'),'Microsoft.SecurityInsights','AbstractSecurityInsightsAPI')]",
+        "contentId": "b1c2d3e4-5f60-5a7b-8c9d-0e1f2a3b4c5d",
+        "kind": "DataConnector",
+        "version": "1.0.0",
+        "source": {
+          "kind": "Solution",
+          "name": "Abstract Security",
+          "sourceId": "ffb59bbb-ab7c-5964-8c86-22d7b5df331b"
+        },
+        "author": {
+          "name": "Abstract Security",
+          "email": "support@abstract.security"
+        },
+        "support": {
+          "name": "Abstract Security",
+          "tier": "Partner",
+          "link": "https://abstract.security"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/savedSearches",
+      "apiVersion": "2022-10-01",
+      "name": "[concat(parameters('workspace'),'/Abstract_DailyValueSummary')]",
+      "properties": {
+        "etag": "*",
+        "displayName": "Abstract - Daily value & reduction summary",
+        "category": "Hunting Queries",
+        "query": "// Abstract \u2014 Daily value & reduction summary (roll up per day for outbrief).\nlet events = AbstractEventLogs_CL | extend agg=todouble(coalesce(toreal(AbstractEvent.aggregation_count),1.0)), b=todouble(estimate_data_size(AbstractEvent))\n  | summarize RawRepresented=sum(agg), Ingested=count(), IngestedGB=round(sum(b)/1024.0/1024/1024,4) by Day=bin(TimeGenerated,1d);\nlet insights = AbstractInsights_CL | summarize Insights=count(), HighCritical=countif(Severity_s in ('high','critical')) by Day=bin(TimeGenerated,1d);\nlet incidents = SecurityIncident | summarize Incidents=count() by Day=bin(TimeGenerated,1d);\nevents\n| join kind=leftouter insights on Day\n| join kind=leftouter incidents on Day\n| extend AggregationRatio=round(RawRepresented/Ingested,1)\n| project Day, RawRepresented, Ingested, AggregationRatio, IngestedGB, Insights, HighCritical, Incidents\n| sort by Day desc",
+        "version": 2,
+        "tags": [
+          {
+            "name": "description",
+            "value": "Per-day rollup: raw represented vs ingested, aggregation ratio, GB, insights, high/critical, incidents \u2014 the SE outbrief summary."
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/metadata",
+      "apiVersion": "2023-04-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/HuntingQuery-c2d3e4f5-6071-5b8c-9d0e-1f2a3b4c5d6e')]",
+      "location": "[parameters('workspace-location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/savedSearches', parameters('workspace'),'Abstract_DailyValueSummary')]"
+      ],
+      "properties": {
+        "parentId": "[resourceId('Microsoft.OperationalInsights/workspaces/savedSearches', parameters('workspace'),'Abstract_DailyValueSummary')]",
+        "contentId": "c2d3e4f5-6071-5b8c-9d0e-1f2a3b4c5d6e",
+        "kind": "HuntingQuery",
+        "version": "1.0.0",
+        "source": {
+          "kind": "Solution",
+          "name": "Abstract Security",
+          "sourceId": "ffb59bbb-ab7c-5964-8c86-22d7b5df331b"
+        },
+        "author": {
+          "name": "Abstract Security",
+          "email": "support@abstract.security"
+        },
+        "support": {
+          "name": "Abstract Security",
+          "tier": "Partner",
+          "link": "https://abstract.security"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/automationRules",
+      "apiVersion": "2023-02-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/d3e4f5a6-7182-5c9d-0e1f-2a3b4c5d6e7f')]",
+      "location": "[parameters('workspace-location')]",
+      "properties": {
+        "displayName": "Abstract - Tag & prioritize Abstract-originated incidents",
+        "order": 1,
+        "triggeringLogic": {
+          "isEnabled": true,
+          "triggersOn": "Incidents",
+          "triggersWhen": "Created",
+          "conditions": [
+            {
+              "conditionType": "Property",
+              "conditionProperties": {
+                "propertyName": "IncidentTitle",
+                "operator": "Contains",
+                "propertyValues": [
+                  "Abstract"
+                ]
+              }
+            }
+          ]
+        },
+        "actions": [
+          {
+            "order": 1,
+            "actionType": "ModifyProperties",
+            "actionConfiguration": {
+              "labels": [
+                {
+                  "labelName": "Abstract Security"
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/metadata",
+      "apiVersion": "2023-04-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/AutomationRule-d3e4f5a6-7182-5c9d-0e1f-2a3b4c5d6e7f')]",
+      "location": "[parameters('workspace-location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/providers/automationRules', parameters('workspace'),'Microsoft.SecurityInsights','d3e4f5a6-7182-5c9d-0e1f-2a3b4c5d6e7f')]"
+      ],
+      "properties": {
+        "parentId": "[resourceId('Microsoft.OperationalInsights/workspaces/providers/automationRules', parameters('workspace'),'Microsoft.SecurityInsights','d3e4f5a6-7182-5c9d-0e1f-2a3b4c5d6e7f')]",
+        "contentId": "d3e4f5a6-7182-5c9d-0e1f-2a3b4c5d6e7f",
+        "kind": "AutomationRule",
+        "version": "1.0.0",
+        "source": {
+          "kind": "Solution",
+          "name": "Abstract Security",
+          "sourceId": "ffb59bbb-ab7c-5964-8c86-22d7b5df331b"
+        },
+        "author": {
+          "name": "Abstract Security",
+          "email": "support@abstract.security"
+        },
+        "support": {
+          "name": "Abstract Security",
+          "tier": "Partner",
+          "link": "https://abstract.security"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/automationRules",
+      "apiVersion": "2023-02-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/e4f5a6b7-8293-5daf-1f2a-3b4c5d6e7f80')]",
+      "location": "[parameters('workspace-location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'abstract-playbook-verdict')]"
+      ],
+      "properties": {
+        "displayName": "Abstract - Run ASTRO Verdict on Abstract incidents",
+        "order": 2,
+        "triggeringLogic": {
+          "isEnabled": true,
+          "triggersOn": "Incidents",
+          "triggersWhen": "Created",
+          "conditions": [
+            {
+              "conditionType": "Property",
+              "conditionProperties": {
+                "propertyName": "IncidentTitle",
+                "operator": "Contains",
+                "propertyValues": [
+                  "Abstract"
+                ]
+              }
+            }
+          ]
+        },
+        "actions": [
+          {
+            "order": 1,
+            "actionType": "RunPlaybook",
+            "actionConfiguration": {
+              "logicAppResourceId": "[resourceId('Microsoft.Logic/workflows','Abstract-Verdict')]",
+              "tenantId": "[subscription().tenantId]"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/metadata",
+      "apiVersion": "2023-04-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/AutomationRule-e4f5a6b7-8293-5daf-1f2a-3b4c5d6e7f80')]",
+      "location": "[parameters('workspace-location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/providers/automationRules', parameters('workspace'),'Microsoft.SecurityInsights','e4f5a6b7-8293-5daf-1f2a-3b4c5d6e7f80')]"
+      ],
+      "properties": {
+        "parentId": "[resourceId('Microsoft.OperationalInsights/workspaces/providers/automationRules', parameters('workspace'),'Microsoft.SecurityInsights','e4f5a6b7-8293-5daf-1f2a-3b4c5d6e7f80')]",
+        "contentId": "e4f5a6b7-8293-5daf-1f2a-3b4c5d6e7f80",
+        "kind": "AutomationRule",
+        "version": "1.0.0",
+        "source": {
+          "kind": "Solution",
+          "name": "Abstract Security",
+          "sourceId": "ffb59bbb-ab7c-5964-8c86-22d7b5df331b"
+        },
+        "author": {
+          "name": "Abstract Security",
+          "email": "support@abstract.security"
+        },
+        "support": {
+          "name": "Abstract Security",
+          "tier": "Partner",
+          "link": "https://abstract.security"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/automationRules",
+      "apiVersion": "2023-02-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/f5a6b7c8-93a4-5eb0-2a3b-4c5d6e7f8091')]",
+      "location": "[parameters('workspace-location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Resources/deployments', 'abstract-playbook-tune')]"
+      ],
+      "properties": {
+        "displayName": "Abstract - Tune at source on closed Abstract incidents",
+        "order": 3,
+        "triggeringLogic": {
+          "isEnabled": true,
+          "triggersOn": "Incidents",
+          "triggersWhen": "Updated",
+          "conditions": [
+            {
+              "conditionType": "Property",
+              "conditionProperties": {
+                "propertyName": "IncidentTitle",
+                "operator": "Contains",
+                "propertyValues": [
+                  "Abstract"
+                ]
+              }
+            },
+            {
+              "conditionType": "PropertyChanged",
+              "conditionProperties": {
+                "propertyName": "IncidentStatus",
+                "changeType": "ChangedTo",
+                "operator": "Equals",
+                "propertyValues": [
+                  "Closed"
+                ]
+              }
+            }
+          ]
+        },
+        "actions": [
+          {
+            "order": 1,
+            "actionType": "RunPlaybook",
+            "actionConfiguration": {
+              "logicAppResourceId": "[resourceId('Microsoft.Logic/workflows','Abstract-Tune-At-Source')]",
+              "tenantId": "[subscription().tenantId]"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/metadata",
+      "apiVersion": "2023-04-01-preview",
+      "name": "[concat(parameters('workspace'),'/Microsoft.SecurityInsights/AutomationRule-f5a6b7c8-93a4-5eb0-2a3b-4c5d6e7f8091')]",
+      "location": "[parameters('workspace-location')]",
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/providers/automationRules', parameters('workspace'),'Microsoft.SecurityInsights','f5a6b7c8-93a4-5eb0-2a3b-4c5d6e7f8091')]"
+      ],
+      "properties": {
+        "parentId": "[resourceId('Microsoft.OperationalInsights/workspaces/providers/automationRules', parameters('workspace'),'Microsoft.SecurityInsights','f5a6b7c8-93a4-5eb0-2a3b-4c5d6e7f8091')]",
+        "contentId": "f5a6b7c8-93a4-5eb0-2a3b-4c5d6e7f8091",
+        "kind": "AutomationRule",
+        "version": "1.0.0",
+        "source": {
+          "kind": "Solution",
+          "name": "Abstract Security",
+          "sourceId": "ffb59bbb-ab7c-5964-8c86-22d7b5df331b"
+        },
+        "author": {
+          "name": "Abstract Security",
+          "email": "support@abstract.security"
+        },
+        "support": {
+          "name": "Abstract Security",
+          "tier": "Partner",
+          "link": "https://abstract.security"
+        }
+      }
+    }
+  ]
+}

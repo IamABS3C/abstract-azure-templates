@@ -1,0 +1,556 @@
+id: azure.entra.diagnostics
+title: Entra ID identity logs → Event Hub (tenant-wide, once)
+cloud: azure
+service: Microsoft Entra ID activity logs (microsoft.aadiam tenant diagnostic setting)
+direction: source
+transport: event-hub
+status: ga
+provenance: validated
+owner: Solutions Engineering
+last_reviewed: '2026-08-26'
+summary: The highest-value identity telemetry in an Azure estate, and the part with no governance backstop.
+  Entra ID activity logs are NOT Azure Monitor resource logs — they are a single TENANT-level diagnostic
+  setting on the microsoft.aadiam provider. That means Azure Policy cannot manage them (there is nothing
+  per-subscription to evaluate), the deployment must target tenant scope so no portal button can do it,
+  and it is configured exactly once for the whole organisation. One command onboards identity telemetry
+  permanently.
+when_to_use: Always, and early. Sign-in and audit logs carry the detections customers actually care about
+  — impossible travel, password spray, consent grants, privileged role assignment. This node is independent
+  of subscription count and of the Event Hub node's region choices.
+when_not_to_use: Not for Microsoft Graph API or Microsoft 365 unified-audit collection, which are API-pull
+  integrations behind an app registration and use no Event Hub. Also not the deepest source of Entra detail
+  — see the Graph API caveat below, which is the single most important scoping fact on this node.
+scopes:
+- tenant
+covers_future_accounts: true
+mechanism_note: Tenant scope means subscription count is irrelevant. Adding a subscription changes nothing
+  here; the setting already covers the entire directory. This is the one Azure path where "what about
+  accounts we create later" is a non-question.
+abstract_integration:
+  id: default.azure_eventhub.0_7_1
+  name: Azure EventHub
+  mode: PULL
+  verified_on: '2026-08-25'
+alternatives_rejected:
+- option: Manage it with the Azure Policy governance pack
+  why_not: Structurally impossible. There is no per-subscription resource to evaluate, so no DeployIfNotExists
+    can reach a tenant-scope setting. Azure ships NO policy plane for this at all — which makes it simultaneously
+    the highest-value telemetry on the Azure path and the only part with no governance backstop. Nothing
+    re-creates it if someone deletes it.
+- option: Deploy it from the portal
+  why_not: The createUiDefinition model cannot bind a portal deployment above a resource group. Even the
+    Form-view model tops out below tenant scope for this provider, so this is a CLI or PowerShell deployment.
+    Not a limitation of the template.
+- option: Collect Entra sign-ins through the Graph API integration instead
+  why_not: Not an either/or — you likely need both, and for different reasons. See the caveat below.
+- option: Enable every available category
+  why_not: MicrosoftServicePrincipalSignInLogs is preview, very high volume first-party service-to-service
+    traffic, and Microsoft advises against acting on it. Global Secure Access categories emit nothing
+    at all without that product. Enabling everything buys volume, not signal.
+decision:
+- id: q-who
+  question: Who in the customer org can actually create this?
+  why_it_matters: THE most surprising scope requirement in the entire Azure onboarding. This needs the
+    **Security Administrator DIRECTORY role** — an Entra role, not an Azure RBAC role. A subscription
+    Owner cannot do it. A management-group Owner cannot do it. Global Administrator works but is not required.
+    Onboardings stall here for days because the person on the call has every Azure right and none of the
+    directory rights.
+  ask_who: Identity team / whoever administers the Entra tenant — almost never the cloud team
+  options:
+  - value: Security Administrator identified and available
+    leads_to: bicep
+  - value: Only Azure RBAC admins available
+    leads_to: stop:Cannot proceed. Azure subscription or management-group ownership does not grant this.
+      Find the directory-role holder before scheduling the session.
+  - value: Custom security attribute logs also needed
+    leads_to: bicep
+    note: Additionally requires the Attribute Log Administrator directory role. Microsoft recommends keeping
+      that stream separate from the directory audit stream.
+- id: q-categories
+  question: Which categories, given the tenant's licences and products?
+  why_it_matters: 'Selecting a category the tenant does not license or use is harmless — it just produces
+    nothing. But that is also a silent-failure shape: a category can be selectable and emit nothing forever
+    because the underlying PRODUCT is absent, and that is indistinguishable from a broken pipeline unless
+    you knew to expect it.'
+  ask_who: Identity team, with the licence inventory
+  options:
+  - value: The security-relevant default set
+    leads_to: bicep
+    note: AuditLogs, SignInLogs, NonInteractiveUserSignInLogs, ServicePrincipal and ManagedIdentity sign-ins,
+      Provisioning, ADFS, the ID Protection risk categories, and Graph activity.
+  - value: Add Global Secure Access categories
+    leads_to: bicep
+    note: NetworkAccessTrafficLogs, EnrichedOffice365AuditLogs, RemoteNetworkHealthLogs. Emit NOTHING
+      without Entra Internet Access / Private Access, and are unavailable in US Gov and DoD clouds entirely.
+  - value: Add MicrosoftServicePrincipalSignInLogs
+    leads_to: bicep
+    note: Preview, very high volume, first-party service-to-service. Microsoft advises against acting
+      on it. Default off for good reason.
+- id: q-volume
+  question: Is MicrosoftGraphActivityLogs in or out?
+  why_it_matters: 'It is the single best source for "what did this token actually DO" — full visibility
+    into every HTTP request hitting the tenant through Graph. It is also the steepest volume curve on
+    this node: Microsoft publishes roughly 1,000 GiB/month and 4.8 million Event Hubs messages/month for
+    a 100,000-user tenant, against 14 GiB at 1,000 users. Requires P1/P2.'
+  ask_who: Security engineering plus whoever owns the cloud bill
+  options:
+  - value: In — the visibility is worth it
+    leads_to: bicep
+    note: Size the Event Hub for it explicitly. It can dominate the namespace.
+  - value: Out for now, revisit after a volume baseline
+    leads_to: bicep
+    note: Defensible. There is no backfill, so you cannot recover the gap later.
+- id: q-multitenant
+  question: Is there more than one Entra tenant?
+  why_it_matters: 'Azure resource logs can cross subscriptions and, with Lighthouse, tenants. **Entra
+    ID logs cannot.** Microsoft is explicit: the subscription and Event Hubs namespace must both be associated
+    with the tenant the logs come from. A multi-tenant customer (M&A, sovereign subsidiary) needs one
+    hub per Entra tenant for identity logs. Design for it up front; it is not fixable later without re-onboarding.'
+  ask_who: Identity team
+  options:
+  - value: Single tenant
+    leads_to: bicep
+  - value: Multiple tenants
+    leads_to: bicep
+    note: One Event Hub namespace and one deployment per tenant. Plan the hub topology before deploying
+      any of them.
+prereqs:
+  identity:
+  - principal: deployer
+    role: Security Administrator (Entra DIRECTORY role, NOT Azure RBAC)
+    scope: the Entra tenant
+    why: Create or edit the tenant diagnostic setting. This is the scope surprise that stalls onboardings
+      — Azure subscription and management-group ownership do not grant it, and Global Administrator is
+      sufficient but not necessary.
+    least_privilege_alternative: There is no narrower role for the general setting.
+  - principal: deployer
+    role: Attribute Log Administrator (Entra directory role)
+    scope: the Entra tenant
+    why: ONLY for CustomSecurityAttributeAuditLogs. Separate from the general setting.
+  - principal: deployer
+    role: listKeys on the Event Hub authorization rule
+    scope: the Event Hubs namespace
+    why: Creating any diagnostic setting that streams to an Event Hub requires ListKey on the target authorization
+      rule — a permission distinct from writing the setting.
+  - principal: service-identity
+    role: Send on the Event Hub authorization rule
+    scope: the namespace or the hub
+    why: Azure Monitor's streaming mechanism resolves the key from the referenced rule and writes with
+      it. There is NO managed-identity option documented for the Event Hubs destination, which is why
+      a fully SAS-free namespace is impossible while diagnostic settings are a producer.
+  resources:
+  - The Event Hub and its namespace must already exist — this template never creates them.
+  - The namespace must be in the SAME Entra tenant as the logs. Cross-tenant is unsupported for Entra
+    logs specifically.
+  settings:
+  - Entra ID P1/P2 for ProvisioningLogs and MicrosoftGraphActivityLogs; P2 for the ID Protection risk
+    categories. AuditLogs and SignInLogs are available on Free.
+  - Global Secure Access must actually be deployed for its three categories to emit anything.
+  quotas_limits:
+  - MAX 5 DIAGNOSTIC SETTINGS on the tenant, same as any resource. An existing setting to another SIEM
+    counts.
+  - A single setting can define at most ONE destination of each type.
+  - A COMPACTED event hub cannot be used — it requires a partition key Azure Monitor does not supply.
+  lead_time: '**24 hours to 3 days for first data.** Microsoft''s own docs give 15 minutes, 24 hours and
+    3 days on three different live pages; the Azure-resource figure of 90 minutes does NOT apply here.
+    Do not declare an Entra setting broken on day one, and do not let a customer conclude the integration
+    failed. There is no backfill.'
+console_walkthrough:
+- step: 1
+  action: Confirm the Event Hub exists and note its namespace-level Send authorization rule ID
+  where: Azure portal → Event Hubs → namespace → Shared access policies
+  expected: A Send-capable rule, and a hub dedicated to identity telemetry.
+  gotcha: Give identity its own hub. Sign-in volume is bursty and large; sharing a hub with resource logs
+    means one source's retention pressure evicts the other's data.
+  image:
+    path: assets/diagrams/azure-entra-diagnostics.png
+    alt: An Entra tenant with SignInLogs, AuditLogs and NonInteractive sign-ins routed through a single
+      tenant-level diagnostic setting to an Event Hub, alongside a separate Microsoft Graph API poll path
+      into the Abstract platform
+    caption: 'Entra is **not an Azure resource** — it is a tenant-level setting on `microsoft.aadiam`,
+      which is why an Azure subscription Owner cannot create it and a Security Administrator directory
+      role can. Note the second path: roughly half a serious Entra detection set needs the Graph API poll,
+      not the Event Hub.'
+    source: drawio
+    license: vendor-icon-set
+    altered: false
+    captured: '2026-08-26'
+    tenant_safe: true
+- step: 2
+  action: Sign in to the Entra admin center as a Security Administrator
+  where: entra.microsoft.com
+  expected: Entra ID → Monitoring & health → Diagnostic settings is available and editable.
+  gotcha: If the blade is read-only, the account holds Azure rights but not the directory role. Stop and
+    find the right person rather than improvising.
+- step: 3
+  action: Add a diagnostic setting and select the log categories
+  where: Entra ID → Monitoring & health → Diagnostic settings → + Add diagnostic setting
+  expected: A named setting listing the chosen categories.
+  gotcha: The name cannot be changed later when editing an existing integration. Pick something an operator
+    will recognise as load-bearing and not delete.
+- step: 4
+  action: Choose "Stream to an event hub" and select subscription, namespace and hub
+  where: Same blade
+  expected: The subscription and namespace list populates.
+  gotcha: If the namespace does not appear, it is in a different Entra tenant. That is unsupported for
+    Entra logs and no permission change will fix it.
+- step: 5
+  action: Save, then wait
+  where: Same blade
+  expected: Data begins arriving within 24 hours; allow up to 3 days.
+  gotcha: THE most common false alarm on this node. Nothing after an hour is expected behaviour, not a
+    fault. Set the expectation with the customer before they escalate.
+artifacts:
+- kind: bicep
+  external_path: templates/azure/bicep/tenant/entra-diagnostics.bicep
+  provenance: validated
+  recommended: true
+  scope: tenant
+  idempotent: true
+  destructive_risk: Re-running with a different category list REPLACES the category selection on that
+    named setting. It does not merge. Read the existing setting before changing it.
+  validation:
+    command: python3 solutions/scripts/validate-templates.py
+    result: 'All 10 template(s) valid. — templates/tenant/entra-diagnostics.bicep: tenant / uiFormDefinition
+      / ok'
+    run_on: '2026-08-26'
+    tool_version: Bicep CLI 0.44.1, Azure CLI 2.87.0
+  note: 'Uses provider microsoft.aadiam, API version 2017-04-01 — the current one; there has never been
+    a newer stable version. The licensing notes in this template were CORRECTED on 2026-08-26: they previously
+    claimed Entra ID P1/P2 for the sign-in categories, which is not documented. Microsoft''s licensing
+    table lists audit and sign-in logs as available on Free; the real P1/P2 gate people remember is on
+    DOWNLOADING sign-in logs via the Graph API, a different operation.'
+- kind: arm-json
+  external_path: templates/azure/bicep/tenant/entra-diagnostics.azuredeploy.json
+  provenance: validated
+  scope: tenant
+  validation:
+    command: 'python3 solutions/scripts/validate-templates.py  # recompiles every .bicep and fails if
+      the committed ARM is stale'
+    result: recompiled after the licensing-note correction; no drift remaining
+    run_on: '2026-08-26'
+    tool_version: Bicep CLI 0.44.1
+- kind: azure-cli
+  provenance: schema-reviewed
+  scope: tenant
+  inline: "# Tenant scope — note `az deployment tenant`, not `group` or `sub`.\n# There is no portal path\
+    \ at this scope for this provider.\naz deployment tenant create \\\n  --location eastus \\\n  --template-file\
+    \ solutions/templates/tenant/entra-diagnostics.bicep \\\n  --parameters eventHubAuthorizationRuleId=\"\
+    <send-rule-resource-id>\" \\\n               eventHubName=abs-prod-entra\n\n# Read back what is configured\
+    \ — do this BEFORE changing an existing setting,\n# because a redeploy replaces the category list\
+    \ rather than merging it.\naz rest --method get \\\n  --url \"https://management.azure.com/providers/microsoft.aadiam/diagnosticSettings?api-version=2017-04-01\"\
+    \n"
+- kind: terraform
+  provenance: schema-reviewed
+  scope: tenant
+  inline: "# azurerm_monitor_aad_diagnostic_setting is a DIFFERENT resource from\n# azurerm_monitor_diagnostic_setting,\
+    \ and it is the correct one here.\n# Verified real, but note: no Azure-org module consumes it — all\
+    \ public code hits\n# are the provider itself, wrappers, or personal repos. This is ~15 lines you\
+    \ own.\n# Every destination field is ForceNew, and it needs Contributor at\n# /providers/Microsoft.aadiam.\
+    \ Written to the current schema; NOT applied.\n\nresource \"azurerm_monitor_aad_diagnostic_setting\"\
+    \ \"abstract\" {\n  name                           = \"abstract-entra-logstream\"\n  eventhub_authorization_rule_id\
+    \  = var.eventhub_send_rule_id\n  eventhub_name                   = \"abs-prod-entra\"\n\n  enabled_log\
+    \ { category = \"AuditLogs\" }\n  enabled_log { category = \"SignInLogs\" }\n  enabled_log { category\
+    \ = \"NonInteractiveUserSignInLogs\" }\n  enabled_log { category = \"ServicePrincipalSignInLogs\"\
+    \ }\n  enabled_log { category = \"ManagedIdentitySignInLogs\" }\n  enabled_log { category = \"ProvisioningLogs\"\
+    \ }\n  enabled_log { category = \"RiskyUsers\" }\n  enabled_log { category = \"UserRiskEvents\" }\n\
+    \  enabled_log { category = \"MicrosoftGraphActivityLogs\" }\n}\n"
+  note: Terraform genuinely reaches parity here, which is worth knowing — it is the one tenant-scope Azure
+    Monitor resource people assume Terraform cannot do. Pulumi and CDKTF wrap the same provider.
+delivery_surfaces:
+- cli
+- ci-github-actions
+- ci-azure-devops
+verification:
+- check: The diagnostic setting exists and lists the expected categories
+  where: cloud-cli
+  command: az rest --method get --url "https://management.azure.com/providers/microsoft.aadiam/diagnosticSettings?api-version=2017-04-01"
+  healthy: The named setting is present with the intended category list and the correct hub.
+  unhealthy_means: Absent means the deployment did not run at tenant scope, or the account lacked the
+    directory role.
+- check: Messages are arriving on the identity hub specifically
+  where: cloud-console
+  healthy: Event Hubs → the identity hub → Metrics → Incoming Messages non-zero.
+  unhealthy_means: Zero for under 24 hours is EXPECTED. Zero after 3 days means the setting, the Send
+    rule, or the namespace firewall. Check per hub — a busy resource-log hub in the same namespace masks
+    an empty identity hub completely.
+- check: Sign-in events are parsing as Entra events, not as generic Activity Log
+  where: abstract-ui
+  healthy: Sample a sign-in event and confirm identity fields are populated — user, IP, result.
+  unhealthy_means: A live POC recorded Entra sign-in logs "being parsed as Azure Activity Logs rather
+    than Entra-specific logs." If identity fields are empty and the event looks like a generic Activity
+    Log record, that is this defect and not a collection problem.
+- check: The categories you selected are actually emitting
+  where: abstract-ui
+  healthy: Each enabled category appears in the data within a few days.
+  unhealthy_means: A category that never emits is usually a product that is not deployed — Global Secure
+    Access categories are the classic — or a licence the tenant does not hold. Both are silent.
+troubleshooting:
+- symptom: Nothing arrives, hours after saving the setting
+  likely_cause: Normal propagation. Microsoft's docs give 15 minutes, 24 hours and 3 days on three different
+    pages for Entra; the 90-minute Azure-resource figure does not apply.
+  check: Confirm the setting exists and the hub is correct, then wait.
+  fix: Wait up to 3 days before treating it as a fault. Tell the customer this at deploy time, not after
+    they escalate.
+- symptom: The Diagnostic settings blade is read-only
+  likely_cause: The account holds Azure RBAC rights but not the Security Administrator DIRECTORY role.
+  check: Entra ID → Roles and administrators → check the signed-in account's directory roles.
+  fix: Assign Security Administrator. No amount of subscription or management-group ownership substitutes.
+- symptom: The Event Hubs namespace does not appear in the picker
+  likely_cause: The namespace is in a different Entra tenant. Unsupported for Entra logs.
+  check: Compare the namespace's tenant against the tenant whose logs you are exporting.
+  fix: Use a namespace in the same tenant. One hub per Entra tenant for identity logs — no permission
+    change or Lighthouse configuration fixes this.
+- symptom: A category was enabled and has never produced a single record
+  likely_cause: The underlying product is not deployed, or the tenant lacks the licence. Selecting an
+    unavailable category is harmless and silent by design.
+  check: Confirm the licence tier and whether the product (Global Secure Access, AD FS, Entra provisioning)
+    is actually in use.
+  fix: Expected behaviour. Remove the category to reduce noise in the configuration, or deploy the product.
+  silent: true
+- symptom: Sign-ins arrive but identity fields are empty
+  likely_cause: The events are being parsed as generic Azure Activity Log rather than Entra-specific logs.
+  check: Compare a sample event's fields against what the Entra parser should produce.
+  fix: Parser-side, not collection-side. Note azure_eventhub 0.7.1 specifically fixed subscription-vs-tenant
+    confusion in cloud.project_id and identity being dropped on some event types — check the integration
+    version and diff the config's parsers before assuming a platform defect.
+  seen_on: Observed on a live POC
+- symptom: The setting was deleted and nothing restored it
+  likely_cause: There is no policy plane for tenant-scope Entra settings. Azure Policy cannot see them,
+    so nothing re-creates a deleted one. This is a genuine, unavoidable gap.
+  check: Periodically re-read the setting via the API.
+  fix: No platform control exists. Compensate with absence-of-data alerting on the identity dataset and,
+    ideally, a scheduled config check. Treat deletion as a detection problem rather than a governance
+    one.
+  silent: true
+cost:
+  drivers:
+  - driver: Entra log volume into the Event Hub
+    charged_on: Event Hub ingress + throughput units + egress
+    side: customer-cloud
+    note: See the Event Hub node's cost model. This node is a volume source, not a separate bill.
+  - driver: The diagnostic setting itself
+    charged_on: nothing — free
+    side: customer-cloud
+  - driver: Azure Monitor Platform Logs export
+    charged_on: per GB exported
+    side: customer-cloud
+    note: The line everyone models at zero because the diagnostic-setting resource is free. It is not
+      the same thing.
+  surprise_line: MicrosoftGraphActivityLogs. Microsoft publishes ~1,000 GiB/month and ~4.8 million Event
+    Hubs messages/month for a 100,000-user tenant, versus 14 GiB at 1,000 users — a curve steep enough
+    that it can dominate an entire namespace. It is also genuinely the best source for "what did this
+    token actually do", so the answer is to size for it deliberately, not to avoid it blindly.
+  volume_shape: Non-interactive and service-principal sign-ins run 5-10x larger than interactive sign-ins
+    (Microsoft's own figure). Audit events are ~2 KB, sign-in events ~11.5 KB, and a 100,000-user tenant
+    runs about 1.5 million events per day. Non-interactive sign-ins are aggregated before export, which
+    softens the raw ratio somewhat.
+  savings:
+  - Leave MicrosoftServicePrincipalSignInLogs off — preview, very high volume, and Microsoft advises against
+    acting on it.
+  - Omit Global Secure Access categories unless that product is deployed; they emit nothing anyway.
+detections_unlocked:
+- detection: Impossible travel / atypical sign-in location
+  acs_fields:
+  - related.user
+  - source_address
+  mitre:
+  - T1078
+- detection: Password spray across many accounts from one source
+  acs_fields:
+  - related.user
+  - source_address
+  - event.outcome
+  mitre:
+  - T1110.003
+- detection: Legacy-authentication sign-in bypassing modern controls
+  acs_fields:
+  - related.user
+  - action
+  mitre:
+  - T1078.004
+- detection: OAuth consent granted to a risky application
+  acs_fields:
+  - action
+  - related.user
+  mitre:
+  - T1528
+- detection: Service principal credential added
+  acs_fields:
+  - action
+  - related.user
+  mitre:
+  - T1098.001
+- detection: Privileged role assignment (Owner, Global Administrator)
+  acs_fields:
+  - action
+  - related.user
+  mitre:
+  - T1098.003
+- detection: Conditional Access policy modified or disabled
+  acs_fields:
+  - action
+  - related.user
+  mitre:
+  - T1562.001
+- detection: Guest user invited to the directory
+  acs_fields:
+  - action
+  - related.user
+  mitre:
+  - T1136.003
+reviews:
+  cloud_architect: 'Tenant scope makes this the **simplest node in the Azure set architecturally, and
+    the most awkward operationally.**
+
+
+    **Simplest**, because it is deployed once and is completely indifferent to subscription count, region
+    and management-group hierarchy. The region rule that forces one namespace per region for resource
+    logs does not apply — an Entra tenant is not a regional resource.
+
+
+    **Awkward**, because tenant scope means no portal path, a directory role rather than an Azure role,
+    and no policy plane to keep it healthy.
+
+
+    **Give identity its own hub.** Sign-in volume is bursty and Graph activity can dominate a namespace,
+    so sharing retention with resource logs means one source evicts the other.
+
+
+    **Design the tenant topology first.** Entra logs cannot cross tenants, so a multi-tenant customer
+    needs one hub per tenant — and that is not retrofittable.'
+  devops: '**This is a CLI or pipeline deployment, full stop** — `az deployment tenant create`, no portal
+    button, because no portal UI model binds above a resource group for this provider.
+
+
+    **Terraform reaches parity** via `azurerm_monitor_aad_diagnostic_setting` — the one tenant-scope Azure
+    Monitor resource people wrongly assume Terraform cannot do. Every destination field is ForceNew, and
+    it needs Contributor at `/providers/Microsoft.aadiam`.
+
+
+    **The redeploy behaviour is the trap.** Changing the category list **replaces** it rather than merging,
+    so read the existing setting before you change it.
+
+
+    Run it once per tenant and treat it as set-and-forget — but **add a scheduled read-back**, because
+    nothing else will tell you it was deleted.'
+  security_iam: '**The Security Administrator *directory* role is the single biggest scope surprise in
+    the whole Azure onboarding.**
+
+
+    An Azure subscription Owner cannot create this. A management-group Owner cannot create this. Global
+    Administrator works but is more than required.
+
+
+    **Identify that person before the session.** This is where onboardings lose days.
+
+
+    Creating the setting also needs `ListKey` on the Event Hub authorization rule — a permission distinct
+    from writing the setting itself.
+
+
+    **The delivery identity is not a managed identity.** Azure Monitor resolves the key from the referenced
+    SAS rule, and no managed-identity option is documented for the Event Hubs destination. So a SAS-free
+    namespace stays impossible while diagnostic settings are a producer.
+
+
+    **Worth stating to any regulated customer:** there is no policy plane here. Deletion of the highest-value
+    identity feed is invisible to governance, and has to be caught by absence-of-data alerting instead.'
+  finops: 'The setting is free; the volume is not, and it lands on the Event Hub node''s bill.
+
+
+    **Two figures worth quoting rather than estimating.** Microsoft states non-interactive and service-principal
+    sign-ins run **5–10× larger** than interactive, and publishes Graph activity logs at roughly **1,000
+    GiB/month for a 100,000-user tenant**.
+
+
+    **Remember the Azure Monitor platform-logs per-GB export charge.** Teams model it at zero because
+    the diagnostic-setting *resource* is free — a different thing entirely.
+
+
+    **The cheapest real reduction** is declining `MicrosoftServicePrincipalSignInLogs` and the Global
+    Secure Access categories. Both cost volume and return little or nothing.'
+  soc: 'Entra `AuditLogs` and interactive `SignInLogs` are among the highest security value per GB on
+    the whole Azure path — second only to the Activity Log `Administrative` category. **Defer** `NonInteractiveUserSignInLogs`
+    until volume is measured.
+
+
+    **The critical scoping fact: roughly half of a serious Entra detection set is not reachable through
+    this node at all.** The deepest Entra parsing lives on the `microsoft_graph_api` poll integration,
+    which needs Entra P1. Do not promise an identity detection programme on Event Hub alone.
+
+
+    Plan for **24 hours to 3 days** before first data, with no backfill.
+
+
+    And note the absence of any policy plane: a deleted setting is invisible unless you are alerting on
+    absence of the identity dataset specifically.'
+faq:
+- q: Can Azure Policy manage this like it does subscription diagnostic settings?
+  a: No, and not because of a missing feature — there is nothing per-subscription to evaluate, so DeployIfNotExists
+    cannot reach a tenant-scope setting. Azure ships no policy plane for Entra logs at all. It is the
+    only part of the Azure path with no governance backstop, which means a deleted setting is not re-created
+    and must be caught by absence-of-data alerting.
+- q: Why is there no Deploy-to-Azure button?
+  a: No portal UI model binds a deployment above a resource group for this provider. Tenant scope is a
+    CLI or PowerShell deployment. That is Azure's constraint, not the template's.
+- q: Do we need Entra ID P1 or P2?
+  a: For some categories. Microsoft's licensing table lists audit and sign-in logs as available on **Free**;
+    Provisioning logs and Graph activity logs require P1/P2, and the Identity Protection risk categories
+    require P2. The widely-repeated claim that non-interactive and service-principal sign-in EXPORT needs
+    P1 is not documented anywhere in Microsoft's monitoring-health docs — the real P1/P2 gate is on downloading
+    sign-in logs via the Graph API, which is a different operation.
+- q: Nothing has arrived and it has been an hour. Is it broken?
+  a: Almost certainly not. Entra first data takes 24 hours to 3 days — Microsoft's own docs give three
+    different figures across three live pages, and the 90-minute number people remember is for Azure resource
+    logs, not Entra. Set this expectation before deploying.
+- q: We have two Entra tenants. Can one Event Hub serve both?
+  a: No. Azure resource logs can cross subscriptions and, with Lighthouse, tenants — but Microsoft is
+    explicit that for Entra logs the subscription and Event Hubs namespace must both be associated with
+    the tenant the logs come from. One hub per tenant, decided before you deploy any of them.
+related_nodes:
+- azure.event-hub.source
+- azure.event-hub.health-alerts
+- azure.policy.log-streams
+merges_notion:
+- redacted
+references:
+- title: Abstract-MS-Azure — entra-diagnostics.bicep
+  url: https://github.com/IamABS3C/Abstract-MS-Azure-/blob/main/solutions/templates/tenant/entra-diagnostics.bicep
+  tier: internal-repo
+  retrieved: '2026-08-26'
+  supports: Category list, tenant scope, provider and API version. Validated 10/10 on 2026-08-26.
+- title: Configure Microsoft Entra diagnostic settings
+  url: https://learn.microsoft.com/en-us/entra/identity/monitoring-health/howto-configure-diagnostic-settings
+  tier: vendor-doc
+  retrieved: '2026-08-25'
+  supports: Security Administrator requirement; that an unavailable category simply produces no data.
+- title: Stream Microsoft Entra logs to an event hub
+  url: https://learn.microsoft.com/en-us/entra/identity/monitoring-health/howto-stream-logs-to-event-hub
+  tier: vendor-doc
+  retrieved: '2026-08-25'
+  supports: The same-tenant requirement for subscription and namespace; Attribute Log Administrator for
+    custom security attributes; the 5-10x non-interactive volume ratio.
+- title: Entra diagnostic settings log categories
+  url: https://learn.microsoft.com/en-us/entra/identity/monitoring-health/concept-diagnostic-settings-logs-options
+  tier: vendor-doc
+  retrieved: '2026-08-25'
+  supports: The full category list, and that a selected category may emit nothing until the underlying
+    product is in use.
+- title: Microsoft Entra monitoring and health licensing
+  url: https://learn.microsoft.com/en-us/entra/fundamentals/licensing#microsoft-entra-monitoring-and-health
+  tier: vendor-doc
+  retrieved: '2026-08-25'
+  supports: Audit and sign-in logs available on Free; Provisioning and Graph activity logs require P1/P2.
+    Basis for correcting the template's licensing note.
+- title: Microsoft Graph activity logs overview
+  url: https://learn.microsoft.com/en-us/graph/microsoft-graph-activity-logs-overview
+  tier: vendor-doc
+  retrieved: '2026-08-25'
+  supports: P1/P2 requirement, the per-tenant volume table, and availability in all national clouds.
+- title: Internal verified reference — Entra log categories
+  url: https://github.com/IamABS3C/abstract-cloud-onboarding/blob/main/docs/reviews/entra-log-categories.md
+  tier: internal-repo
+  retrieved: '2026-08-26'
+  supports: The verbatim-quoted licensing table, the NOT-VERIFIED findings, and the 24h-to-3-day propagation
+    figure.

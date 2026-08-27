@@ -1,0 +1,28 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "2.0.0.0",
+  "metadata": {
+    "description": "Abstract Security recommended baseline per official docs: Standard tier, 4 partitions, checkpoint storage with private container, Listen-only SAS plus RBAC, Safe Mode networking for frictionless onboarding."
+  },
+  "parameters": {
+    "namespaceName": { "value": "abs-eh001" },
+    "sku": { "value": "Standard" },
+    "capacity": { "value": 2 },
+    "autoInflate": { "value": true },
+    "maxThroughputUnits": { "value": 10 },
+    "autoHubNaming": { "value": true },
+    "hubPrefix": { "value": "evh-abstract" },
+    "environment": { "value": "" },
+    "hubSources": { "value": [ "activity", "entra", "defender" ] },
+    "defaultPartitionCount": { "value": 4 },
+    "defaultRetentionDays": { "value": 7 },
+    "consumerGroupName": { "value": "abstract" },
+    "enableSas": { "value": true },
+    "sasRights": { "value": [ "Listen" ] },
+    "enableRbac": { "value": true },
+    "principalId": { "value": "<service-principal-OBJECT-id>" },
+    "createStorageAccount": { "value": true },
+    "blobContainerName": { "value": "abstract-checkpoints" },
+    "safeMode": { "value": true }
+  }
+}

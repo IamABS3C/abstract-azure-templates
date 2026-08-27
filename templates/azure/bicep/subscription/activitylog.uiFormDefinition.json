@@ -1,0 +1,157 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2021-09-09/uiFormDefinition.schema.json#",
+  "view": {
+    "kind": "Form",
+    "properties": {
+      "title": "Abstract Security — Activity Log export (one subscription)",
+      "steps": [
+        {
+          "name": "basics",
+          "label": "Basics",
+          "description": "Streams **one** subscription's Azure Activity Log to an Abstract Event Hub.\n\nThis is a **subscription-scope** deployment — there is no resource group to pick, because a subscription diagnostic setting is not a resource-group resource. That is also why this form uses the Form view (`uiFormDefinition`) model rather than `createUiDefinition`: only Form view can bind a portal deployment to a subscription, management group or tenant scope.\n\n**Onboarding a whole estate?** Use the governance pack instead — assign it once at a management group and every subscription, current and future, onboards itself. This template is for a single subscription or a quick proof.",
+          "elements": [
+            {
+              "name": "scopeInfo",
+              "type": "Microsoft.Common.InfoBox",
+              "visible": true,
+              "options": {
+                "icon": "Info",
+                "text": "Prerequisite: the Event Hub and its namespace-level Send authorization rule must already exist. Deploy the Event Hub source template first and take the abstractDiagnosticsAuthRuleId and eventHubNames outputs from it — this template never creates hubs.",
+                "uri": "https://learn.microsoft.com/azure/azure-monitor/essentials/diagnostic-settings"
+              }
+            },
+            {
+              "name": "resourceScope",
+              "type": "Microsoft.Common.ResourceScope",
+              "subscription": {
+                "resourceProviders": [
+                  "Microsoft.Insights"
+                ]
+              },
+              "location": {
+                "label": "Deployment metadata region",
+                "toolTip": "Where the deployment record is stored. The Activity Log itself is not regional, so this does not affect collection."
+              },
+              "instanceDetailsLabel": "Target subscription"
+            },
+            {
+              "name": "settingName",
+              "type": "Microsoft.Common.TextBox",
+              "label": "Diagnostic setting name",
+              "defaultValue": "abstract-activity-logs",
+              "toolTip": "Azure allows a maximum of five diagnostic settings per subscription. If the customer already streams to another SIEM, this is an ADDITIONAL setting and does not displace it — but the ceiling is real.",
+              "constraints": {
+                "required": true,
+                "regex": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,258}[a-zA-Z0-9]$",
+                "validationMessage": "2-260 characters, starting and ending alphanumeric."
+              },
+              "visible": true
+            }
+          ]
+        },
+        {
+          "name": "hub",
+          "label": "Event Hub",
+          "description": "Where the Activity Log is delivered.",
+          "elements": [
+            {
+              "name": "regionNote",
+              "type": "Microsoft.Common.InfoBox",
+              "visible": true,
+              "options": {
+                "icon": "Info",
+                "text": "The region rule does NOT apply here. Azure Monitor requires an Event Hub to share a region with the monitored resource only when that resource is regional — a subscription is not. One hub therefore serves every subscription in the estate, wherever its resources live."
+              }
+            },
+            {
+              "name": "eventHubAuthorizationRuleId",
+              "type": "Microsoft.Common.TextBox",
+              "label": "Event Hubs authorization rule ID",
+              "placeholder": "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.EventHub/namespaces/<ns>/authorizationrules/abstract-diagnostics-send",
+              "toolTip": "Namespace-level rule with Send rights — the abstractDiagnosticsAuthRuleId output of the Event Hub source template. Send alone is sufficient when the hub already exists, despite Microsoft's docs listing Manage+Send+Listen; the wider rights only matter if Azure Monitor has to create the hub for you.",
+              "constraints": {
+                "required": true,
+                "regex": "^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.EventHub/namespaces/[^/]+/[Aa]uthorization[Rr]ules/[^/]+$",
+                "validationMessage": "Must be a full namespace-level authorization rule resource ID ending in /authorizationrules/<rule>."
+              },
+              "visible": true
+            },
+            {
+              "name": "eventHubName",
+              "type": "Microsoft.Common.TextBox",
+              "label": "Event Hub name",
+              "defaultValue": "abs-prod-activity",
+              "toolTip": "Must already exist. The source template auto-names hubs <hubPrefix>-<environment>-<source>, so its defaults produce abs-prod-activity. Check the eventHubNames output rather than trusting this default — a name that does not exist fails silently.",
+              "constraints": {
+                "required": true,
+                "regex": "^[a-zA-Z0-9]([a-zA-Z0-9._-]{0,254}[a-zA-Z0-9])?$",
+                "validationMessage": "1-256 characters: letters, numbers, periods, hyphens, underscores."
+              },
+              "visible": true
+            }
+          ]
+        },
+        {
+          "name": "categories",
+          "label": "Categories",
+          "description": "Which Activity Log categories to stream.",
+          "elements": [
+            {
+              "name": "categories",
+              "type": "Microsoft.Common.DropDown",
+              "label": "Activity Log categories",
+              "multiselect": true,
+              "selectAll": true,
+              "filter": true,
+              "defaultValue": [
+                "Administrative",
+                "Security",
+                "ServiceHealth",
+                "Alert",
+                "Recommendation",
+                "Policy",
+                "Autoscale",
+                "ResourceHealth"
+              ],
+              "toolTip": "Abstract recommends all eight. Activity Log volume is modest and the pipeline filters downstream, so narrowing here only creates blind spots you cannot recover retroactively.",
+              "constraints": {
+                "required": true,
+                "allowedValues": [
+                  { "label": "Administrative — create/update/delete on any resource", "value": "Administrative" },
+                  { "label": "Security — Defender for Cloud alerts surfaced in Activity Log", "value": "Security" },
+                  { "label": "ServiceHealth — Azure-side incidents affecting you", "value": "ServiceHealth" },
+                  { "label": "Alert — Azure Monitor alert activations", "value": "Alert" },
+                  { "label": "Recommendation — Advisor recommendations", "value": "Recommendation" },
+                  { "label": "Policy — Azure Policy effect actions (audit/deny/deploy)", "value": "Policy" },
+                  { "label": "Autoscale — autoscale engine actions", "value": "Autoscale" },
+                  { "label": "ResourceHealth — resource health transitions", "value": "ResourceHealth" }
+                ]
+              },
+              "visible": true
+            },
+            {
+              "name": "latencyNote",
+              "type": "Microsoft.Common.InfoBox",
+              "visible": true,
+              "options": {
+                "icon": "Info",
+                "text": "Expect data within about 90 minutes of deployment. An empty hub in the first few minutes is normal, not a failure. If nothing arrives within 24 hours, disable and re-enable the setting before escalating."
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "outputs": {
+      "kind": "Subscription",
+      "subscriptionId": "[steps('basics').resourceScope.subscription.subscriptionId]",
+      "location": "[steps('basics').resourceScope.location.name]",
+      "parameters": {
+        "settingName": "[steps('basics').settingName]",
+        "eventHubAuthorizationRuleId": "[steps('hub').eventHubAuthorizationRuleId]",
+        "eventHubName": "[steps('hub').eventHubName]",
+        "categories": "[steps('categories').categories]"
+      }
+    }
+  }
+}

@@ -1,0 +1,337 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/0.1.2-preview/CreateUIDefinition.MultiVm.json#",
+  "handler": "Microsoft.Azure.CreateUIDef",
+  "version": "0.1.2-preview",
+  "parameters": {
+    "config": {
+      "isWizard": true,
+      "basics": {
+        "description": "![Abstract Security](https://cybersecurity-excellence-awards.com/wp-content/uploads/163661.png)\n\n# ABSTRACT SECURITY\n**The Security Data Pipeline Platform.** Deliver enriched, normalized security events to any destination — in real time, at scale.\n\n[abstract.security](https://abstract.security) · [Documentation](https://docs.abstractsecurity.app/docs/integrations/destination-integrations/azure-eventhub-destination/) · [Book a demo](https://abstract.security)\n\n---\n### Azure EventHub — Destination Integration\nAbstract **writes to** Event Hub. This guided deployment provisions the namespace, the destination hub, and a least-privilege **Send** SAS rule (keys are never exposed in outputs), with optional Entra ID delivery and Safe Mode networking so Abstract can always reach it.\n\n✓ Standard tier minimum  ✓ Least-privilege Send  ✓ Optional Entra ID (RBAC) delivery\n\nWhen the deployment finishes, the **Outputs** tab gives you the `EventHub Name` and tells you exactly where to copy the Send connection string for the Abstract destination modal.",
+        "resourceGroup": {
+          "constraints": {
+            "validations": []
+          }
+        }
+      }
+    },
+    "basics": [
+      {
+        "name": "namespaceName",
+        "type": "Microsoft.Common.TextBox",
+        "label": "Event Hubs namespace name",
+        "toolTip": "Globally unique, 6-50 characters, letters/numbers/hyphens, starts with a letter. Becomes <name>.servicebus.windows.net.",
+        "placeholder": "e.g. contoso-abstract-dest",
+        "constraints": {
+          "required": true,
+          "regex": "^[a-zA-Z][a-zA-Z0-9-]{4,48}[a-zA-Z0-9]$",
+          "validationMessage": "6-50 chars, letters/numbers/hyphens, must start with a letter and end with a letter or number."
+        }
+      },
+      {
+        "name": "sku",
+        "type": "Microsoft.Common.DropDown",
+        "label": "Pricing tier",
+        "defaultValue": "Standard",
+        "toolTip": "Abstract requires Standard as the minimum tier. Premium uses Processing Units and dedicated capacity.",
+        "constraints": {
+          "required": true,
+          "allowedValues": [
+            { "label": "Standard (Abstract minimum)", "value": "Standard" },
+            { "label": "Premium", "value": "Premium" }
+          ]
+        }
+      },
+      {
+        "name": "capacity",
+        "type": "Microsoft.Common.Slider",
+        "label": "Capacity (Throughput / Processing Units)",
+        "subLabel": "TU",
+        "defaultValue": 1,
+        "min": 1,
+        "max": 40,
+        "toolTip": "~1 TU per 1 MB/s of expected delivery throughput. Premium accepts 1, 2, 4, 8 or 16 PUs only.",
+        "showStepMarkers": false
+      },
+      {
+        "name": "autoInflate",
+        "type": "Microsoft.Common.CheckBox",
+        "label": "Enable Auto-Inflate (Standard tier scales Throughput Units automatically)",
+        "defaultValue": true,
+        "visible": "[equals(basics('sku'), 'Standard')]"
+      },
+      {
+        "name": "maxThroughputUnits",
+        "type": "Microsoft.Common.Slider",
+        "label": "Auto-Inflate ceiling (Throughput Units)",
+        "subLabel": "TU",
+        "defaultValue": 20,
+        "min": 1,
+        "max": 40,
+        "showStepMarkers": false,
+        "visible": "[and(equals(basics('sku'), 'Standard'), basics('autoInflate'))]"
+      }
+    ],
+    "steps": [
+      {
+        "name": "hub",
+        "label": "Destination hub",
+        "elements": [
+          {
+            "name": "hubInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Info",
+              "text": "Abstract writes processed events into this single hub. Its name goes in the 'EventHub Name' field of the Abstract destination integration. Abstract docs recommend at least 4 partitions."
+            }
+          },
+          {
+            "name": "eventHubName",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Event Hub name",
+            "defaultValue": "abstract-destination-hub",
+            "toolTip": "Enter this value in the 'EventHub Name' field of the Abstract destination integration.",
+            "constraints": {
+              "required": true,
+              "regex": "^[a-zA-Z0-9]([a-zA-Z0-9._-]{0,254}[a-zA-Z0-9])?$",
+              "validationMessage": "1-256 chars: letters, numbers, periods, hyphens, underscores; starts/ends alphanumeric."
+            }
+          },
+          {
+            "name": "partitionCount",
+            "type": "Microsoft.Common.Slider",
+            "label": "Partitions",
+            "subLabel": "partitions",
+            "defaultValue": 4,
+            "min": 1,
+            "max": 32,
+            "showStepMarkers": false,
+            "toolTip": "Abstract docs recommend at least 4. Partitions cannot be reduced after creation."
+          },
+          {
+            "name": "retentionDays",
+            "type": "Microsoft.Common.Slider",
+            "label": "Message retention (days)",
+            "subLabel": "days",
+            "defaultValue": 7,
+            "min": 1,
+            "max": 7,
+            "showStepMarkers": true,
+            "toolTip": "Size to ride out downstream consumer downtime."
+          }
+        ]
+      },
+      {
+        "name": "auth",
+        "label": "Authentication",
+        "elements": [
+          {
+            "name": "authInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Info",
+              "text": "The Abstract EventHub Destination uses a Send connection string. A least-privilege Send-only SAS rule is always created (its keys are NEVER shown in deployment outputs). Optionally also grant a service principal the Azure Event Hubs Data Sender role for Entra ID based delivery."
+            }
+          },
+          {
+            "name": "sendRuleName",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Send SAS rule name",
+            "defaultValue": "abstract-send",
+            "toolTip": "Least-privilege Send shared access policy. Use its primary connection string in the Abstract destination modal instead of RootManageSharedAccessKey.",
+            "constraints": {
+              "required": true,
+              "regex": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,49}$",
+              "validationMessage": "1-50 chars: letters, numbers, periods, hyphens, underscores."
+            }
+          },
+          {
+            "name": "enableRbac",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Also grant a service principal the Azure Event Hubs Data Sender role (Entra ID delivery, no shared keys)",
+            "defaultValue": false
+          },
+          {
+            "name": "principalId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Service principal object ID",
+            "toolTip": "Object ID of the Enterprise Application (service principal) Abstract authenticates as - NOT the Application (client) ID.",
+            "placeholder": "00000000-0000-0000-0000-000000000000",
+            "defaultValue": "",
+            "constraints": {
+              "required": "[steps('auth').enableRbac]",
+              "regex": "^[0-9a-fA-F]{8}-([0-9a-fA-F]{4}-){3}[0-9a-fA-F]{12}$",
+              "validationMessage": "Must be a GUID (the service principal OBJECT id)."
+            },
+            "visible": "[steps('auth').enableRbac]"
+          },
+          {
+            "name": "roleDefinitionName",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Event Hubs role",
+            "defaultValue": "Azure Event Hubs Data Sender (least privilege)",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                { "label": "Azure Event Hubs Data Sender (least privilege)", "value": "Azure Event Hubs Data Sender" },
+                { "label": "Azure Event Hubs Data Owner", "value": "Azure Event Hubs Data Owner" }
+              ]
+            },
+            "visible": "[steps('auth').enableRbac]"
+          }
+        ]
+      },
+      {
+        "name": "network",
+        "label": "Networking",
+        "elements": [
+          {
+            "name": "profile",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Security profile",
+            "defaultValue": "Safe Mode — public access stays on (recommended for onboarding)",
+            "toolTip": "Safe Mode guarantees Abstract can reach the namespace to deliver events. Harden later by redeploying with IP Allowlist, Private Only or Hybrid.",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                { "label": "Safe Mode — public access stays on (recommended for onboarding)", "value": "SafeMode" },
+                { "label": "IP Allowlist — public, firewall default-deny with allowed CIDRs", "value": "IpAllowlist" },
+                { "label": "Private Only — no public access, Private Endpoint required", "value": "PrivateOnly" },
+                { "label": "Hybrid — Private Endpoint + public IP allowlist", "value": "Hybrid" }
+              ]
+            }
+          },
+          {
+            "name": "privateOnlyWarning",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Warning",
+              "text": "Private Only blocks ALL public access. Abstract (external SaaS) must then reach the namespace over your private connectivity, or event delivery will fail. Verify this before choosing it."
+            },
+            "visible": "[equals(steps('network').profile, 'PrivateOnly')]"
+          },
+          {
+            "name": "ipCsv",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Allowed public IP ranges (comma-separated CIDRs)",
+            "toolTip": "Abstract egress IPs plus your admin ranges.",
+            "placeholder": "203.0.113.0/24,198.51.100.7",
+            "defaultValue": "",
+            "constraints": {
+              "required": "[or(equals(steps('network').profile, 'IpAllowlist'), equals(steps('network').profile, 'Hybrid'))]",
+              "regex": "^[0-9./, ]*$",
+              "validationMessage": "Comma-separated IPv4 addresses or CIDR ranges."
+            },
+            "visible": "[or(equals(steps('network').profile, 'IpAllowlist'), equals(steps('network').profile, 'Hybrid'))]"
+          },
+          {
+            "name": "subnetId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Subnet resource ID for the Private Endpoint",
+            "toolTip": "Full ARM resource ID of an existing subnet.",
+            "defaultValue": "",
+            "constraints": {
+              "required": "[or(equals(steps('network').profile, 'PrivateOnly'), equals(steps('network').profile, 'Hybrid'))]",
+              "regex": "^$|^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/virtualNetworks/[^/]+/subnets/[^/]+$",
+              "validationMessage": "Must be a full subnet resource ID."
+            },
+            "visible": "[or(equals(steps('network').profile, 'PrivateOnly'), equals(steps('network').profile, 'Hybrid'))]"
+          },
+          {
+            "name": "privateDnsZoneId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Private DNS zone ID — privatelink.servicebus.windows.net (optional)",
+            "defaultValue": "",
+            "constraints": {
+              "required": false,
+              "regex": "^$|^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Network/privateDnsZones/privatelink\\.servicebus\\.windows\\.net$",
+              "validationMessage": "Must be the resource ID of a privatelink.servicebus.windows.net Private DNS zone."
+            },
+            "visible": "[or(equals(steps('network').profile, 'PrivateOnly'), equals(steps('network').profile, 'Hybrid'))]"
+          },
+          {
+            "name": "allowAzureServices",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Allow trusted Microsoft services through the firewall",
+            "defaultValue": true
+          }
+        ]
+      },
+      {
+        "name": "monitoring",
+        "label": "Monitoring",
+        "elements": [
+          {
+            "name": "monitoringInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Info",
+              "text": "Optionally stream the namespace's own diagnostic logs and metrics to Log Analytics (and/or archive them to a storage account) so you can watch the health of the delivery pipeline itself. Leave this off to skip - it can always be added later by redeploying."
+            }
+          },
+          {
+            "name": "enableDiagnostics",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Send namespace diagnostics to Log Analytics",
+            "defaultValue": false,
+            "toolTip": "Creates a diagnostic setting on the Event Hubs namespace (allLogs + AllMetrics). Diagnostics are only provisioned when a workspace or storage account is supplied below."
+          },
+          {
+            "name": "logAnalyticsWorkspaceId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Log Analytics workspace resource ID",
+            "toolTip": "Full ARM resource ID of the workspace: Portal > Log Analytics workspace > Settings > Properties > Resource ID. Optional - a checked box with no target simply creates nothing.",
+            "placeholder": "/subscriptions/.../resourceGroups/.../providers/Microsoft.OperationalInsights/workspaces/...",
+            "defaultValue": "",
+            "constraints": {
+              "required": false,
+              "regex": "^$|^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.OperationalInsights/workspaces/[^/]+$",
+              "validationMessage": "Leave blank, or paste the full Log Analytics workspace resource ID (/subscriptions/.../workspaces/...)."
+            },
+            "visible": "[steps('monitoring').enableDiagnostics]"
+          },
+          {
+            "name": "diagnosticsStorageAccountId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Diagnostics archive storage account resource ID (optional)",
+            "toolTip": "Full ARM resource ID of a storage account to archive diagnostics to. Leave blank to use Log Analytics only.",
+            "placeholder": "/subscriptions/.../resourceGroups/.../providers/Microsoft.Storage/storageAccounts/...",
+            "defaultValue": "",
+            "constraints": {
+              "required": false,
+              "regex": "^$|^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.Storage/storageAccounts/[^/]+$",
+              "validationMessage": "Leave blank, or paste the full storage account resource ID (/subscriptions/.../storageAccounts/...)."
+            },
+            "visible": "[steps('monitoring').enableDiagnostics]"
+          }
+        ]
+      }
+    ],
+    "outputs": {
+      "location": "[location()]",
+      "namespaceName": "[basics('namespaceName')]",
+      "sku": "[basics('sku')]",
+      "capacity": "[basics('capacity')]",
+      "autoInflate": "[if(equals(basics('sku'), 'Standard'), coalesce(basics('autoInflate'), false), false)]",
+      "maxThroughputUnits": "[coalesce(basics('maxThroughputUnits'), 20)]",
+      "eventHubName": "[steps('hub').eventHubName]",
+      "partitionCount": "[steps('hub').partitionCount]",
+      "retentionDays": "[steps('hub').retentionDays]",
+      "enableSas": true,
+      "sendRuleName": "[coalesce(steps('auth').sendRuleName, 'abstract-send')]",
+      "enableRbac": "[coalesce(steps('auth').enableRbac, false)]",
+      "principalId": "[coalesce(steps('auth').principalId, '')]",
+      "roleDefinitionName": "[coalesce(steps('auth').roleDefinitionName, 'Azure Event Hubs Data Sender')]",
+      "principalType": "ServicePrincipal",
+      "allowedIpRanges": "[split(coalesce(steps('network').ipCsv, ''), ',')]",
+      "allowAzureServices": "[steps('network').allowAzureServices]",
+      "disablePublicNetwork": "[equals(steps('network').profile, 'PrivateOnly')]",
+      "enablePrivateEndpoint": "[or(equals(steps('network').profile, 'PrivateOnly'), equals(steps('network').profile, 'Hybrid'))]",
+      "subnetId": "[coalesce(steps('network').subnetId, '')]",
+      "privateDnsZoneId": "[coalesce(steps('network').privateDnsZoneId, '')]",
+      "safeMode": "[equals(steps('network').profile, 'SafeMode')]",
+      "enableDiagnostics": "[coalesce(steps('monitoring').enableDiagnostics, false)]",
+      "logAnalyticsWorkspaceId": "[coalesce(steps('monitoring').logAnalyticsWorkspaceId, '')]",
+      "diagnosticsStorageAccountId": "[coalesce(steps('monitoring').diagnosticsStorageAccountId, '')]"
+    }
+  }
+}

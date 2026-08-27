@@ -1,0 +1,399 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2021-09-09/uiFormDefinition.schema.json#",
+  "view": {
+    "kind": "Form",
+    "properties": {
+      "title": "Abstract Security — per-subscription app registrations via Azure Policy",
+      "steps": [
+        {
+          "name": "basics",
+          "label": "Basics",
+          "description": "Assigns an Azure Policy that creates one Entra app registration per subscription for Abstract's Microsoft Graph and Microsoft 365 collection.\n\n**Read this before deploying — there is a safer path.** Azure Policy cannot create Entra objects: a `DeployIfNotExists` policy deploys an ARM template, and app registrations are not ARM resources. This policy therefore deploys a **privileged container into every target subscription** which then calls Graph. It works, but it needs Owner on each subscription, costs a container run per subscription, scatters the audit trail across N deployment histories, and cannot see the Entra app it created — so it gates on an ARM proxy that can drift.\n\nThe **event-driven path** (`templates/automation/`) achieves the same outcome with one central identity, one run history, and no per-subscription compute. Use this policy path only when governance mandates that every control arrive through Azure Policy.",
+          "elements": [
+            {
+              "name": "preferAutomation",
+              "type": "Microsoft.Common.InfoBox",
+              "visible": true,
+              "options": {
+                "icon": "Warning",
+                "text": "RECOMMENDED ALTERNATIVE — the event-driven Logic App path is live-tested, keeps the tier-0 identity in one place, and costs nothing per subscription. Only continue here if Azure Policy is a governance requirement.",
+                "uri": "https://github.com/IamABS3C/Abstract-MS-Azure-/blob/main/docs/azure-app-registrations.md"
+              }
+            },
+            {
+              "name": "bootstrapWarning",
+              "type": "Microsoft.Common.InfoBox",
+              "visible": true,
+              "options": {
+                "icon": "Warning",
+                "text": "PREREQUISITE, NOT AUTOMATABLE — the managed identity below must already hold Microsoft Graph Application.ReadWrite.All + AppRoleAssignment.ReadWrite.All, consented by a Global Administrator. Nothing can automate that grant: an identity able to assign app roles can grant ITSELF anything in the directory. Run ./scripts/Deploy-AbstractAppReg.sh -a Bootstrap once per tenant first.",
+                "uri": "https://learn.microsoft.com/graph/permissions-reference"
+              }
+            },
+            {
+              "name": "resourceScope",
+              "type": "Microsoft.Common.ResourceScope",
+              "managementGroup": {
+                "label": "Target management group",
+                "toolTip": "The policy is assigned here. Every subscription in this group — today's and every one added later — is in scope."
+              },
+              "location": {
+                "label": "Assignment identity region",
+                "toolTip": "Where the policy assignment's managed identity and the deploymentScript container live. Unrelated to where logs are collected."
+              }
+            },
+            {
+              "name": "namePrefix",
+              "type": "Microsoft.Common.TextBox",
+              "label": "Assignment name prefix",
+              "defaultValue": "abs",
+              "toolTip": "Management-group policy assignment names are capped at 24 characters, so this is limited to 6.",
+              "constraints": {
+                "required": true,
+                "regex": "^[a-z0-9]{2,6}$",
+                "validationMessage": "2-6 lowercase letters or digits."
+              },
+              "visible": true
+            },
+            {
+              "name": "rolloutMode",
+              "type": "Microsoft.Common.OptionsGroup",
+              "label": "Rollout mode",
+              "defaultValue": "Report only (recommended)",
+              "toolTip": "Report-only tells you exactly which subscriptions lack an Abstract app without creating a single credential. Always start here.",
+              "constraints": {
+                "required": true,
+                "allowedValues": [
+                  { "label": "Report only (recommended)", "value": "audit" },
+                  { "label": "Enforce — create app registrations", "value": "deploy" }
+                ]
+              },
+              "visible": true
+            },
+            {
+              "name": "enforceWarning",
+              "type": "Microsoft.Common.InfoBox",
+              "visible": "[equals(steps('basics').rolloutMode, 'deploy')]",
+              "options": {
+                "icon": "Warning",
+                "text": "ENFORCE MODE — each in-scope subscription will get an Entra app registration with a client secret, created by a privileged container running in that subscription. Make sure the tag gate on the next step is set, or every subscription in the management group gets a tier-0 credential without an explicit decision."
+              }
+            }
+          ]
+        },
+        {
+          "name": "identity",
+          "label": "Identity & secrets",
+          "description": "The pre-consented identity that acts, and where its generated secrets land.",
+          "elements": [
+            {
+              "name": "managedIdentityResourceId",
+              "type": "Microsoft.Common.TextBox",
+              "label": "Managed identity resource ID",
+              "placeholder": "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/id-abstract-appreg",
+              "toolTip": "The user-assigned identity created and consented by the Bootstrap step. Treat it as tier-0: restrict who can attach it by granting 'Managed Identity Operator' narrowly — that is the real control here.",
+              "constraints": {
+                "required": true,
+                "regex": "^/subscriptions/[^/]+/resource[Gg]roups/[^/]+/providers/Microsoft\\.ManagedIdentity/userAssignedIdentities/[^/]+$",
+                "validationMessage": "Must be a full user-assigned managed identity resource ID."
+              },
+              "visible": true
+            },
+            {
+              "name": "managedIdentityClientId",
+              "type": "Microsoft.Common.TextBox",
+              "label": "Managed identity client ID",
+              "placeholder": "00000000-0000-0000-0000-000000000000",
+              "toolTip": "The same identity's client ID. The container needs it for 'az login --identity --username <clientId>' — the resource ID alone is not enough.",
+              "constraints": {
+                "required": true,
+                "regex": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                "validationMessage": "Must be a GUID."
+              },
+              "visible": true
+            },
+            {
+              "name": "centralKeyVaultName",
+              "type": "Microsoft.Common.TextBox",
+              "label": "Central Key Vault name",
+              "toolTip": "Every generated client secret goes here. Deliberately CENTRAL rather than one vault per subscription — scattering tier-0 secrets across the estate is worse, not better.",
+              "constraints": {
+                "required": true,
+                "regex": "^[a-zA-Z][a-zA-Z0-9-]{1,22}[a-zA-Z0-9]$",
+                "validationMessage": "3-24 characters, letters/numbers/hyphens, starting with a letter."
+              },
+              "visible": true
+            },
+            {
+              "name": "centralKeyVaultResourceGroup",
+              "type": "Microsoft.Common.TextBox",
+              "label": "Central Key Vault resource group",
+              "constraints": {
+                "required": true,
+                "regex": "^[a-zA-Z0-9._()-]{1,90}$",
+                "validationMessage": "1-90 characters, valid resource group name."
+              },
+              "visible": true
+            },
+            {
+              "name": "centralKeyVaultSubscriptionId",
+              "type": "Microsoft.Common.TextBox",
+              "label": "Central Key Vault subscription ID",
+              "constraints": {
+                "required": true,
+                "regex": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$",
+                "validationMessage": "Must be a GUID."
+              },
+              "visible": true
+            }
+          ]
+        },
+        {
+          "name": "app",
+          "label": "App shape & scope",
+          "description": "What each created app looks like, and which subscriptions are targeted.",
+          "elements": [
+            {
+              "name": "tenantWideNote",
+              "type": "Microsoft.Common.InfoBox",
+              "visible": true,
+              "options": {
+                "icon": "Info",
+                "text": "\"Per subscription\" is narrower than it sounds. Entra app registrations and their Graph permissions are TENANT-level — a Graph application permission cannot be scoped to a subscription. What one app per subscription isolates is credentials and Azure RBAC, NOT Graph or Microsoft 365 data access. Correct this before anyone designs a compliance control on the wrong assumption."
+              }
+            },
+            {
+              "name": "appNamePattern",
+              "type": "Microsoft.Common.TextBox",
+              "label": "App display-name pattern",
+              "defaultValue": "Abstract-{sub}",
+              "toolTip": "{sub} is replaced with the subscription ID. This is ALSO the idempotency key — an app with a matching name is reused rather than duplicated, so policy re-evaluation is safe.",
+              "constraints": {
+                "required": true,
+                "regex": "^.*\\{sub\\}.*$",
+                "validationMessage": "Must contain {sub} so each subscription gets a distinct app name."
+              },
+              "visible": true
+            },
+            {
+              "name": "graphPermissions",
+              "type": "Microsoft.Common.DropDown",
+              "label": "Graph application permissions",
+              "multiselect": true,
+              "selectAll": true,
+              "filter": true,
+              "defaultValue": [
+                "AuditLog.Read.All",
+                "SecurityAlert.Read.All",
+                "SecurityEvents.Read.All",
+                "SecurityIncident.Read.All",
+                "Directory.Read.All",
+                "IdentityRiskEvent.Read.All",
+                "IdentityRiskyUser.Read.All",
+                "IdentityRiskyServicePrincipal.Read.All",
+                "ThreatHunting.Read.All",
+                "User.Read.All",
+                "Group.Read.All",
+                "Device.Read.All"
+              ],
+              "toolTip": "Every name here was verified to exist as a Graph APPLICATION permission against the live Graph service principal. 'Security.Read.All' is deliberately absent — it exists as neither an application permission nor a delegated scope, and requesting it silently produces a coverage gap.",
+              "constraints": {
+                "required": true,
+                "allowedValues": [
+                  { "label": "AuditLog.Read.All — Entra audit + sign-in logs", "value": "AuditLog.Read.All" },
+                  { "label": "SecurityAlert.Read.All — alerts_v2", "value": "SecurityAlert.Read.All" },
+                  { "label": "SecurityEvents.Read.All — legacy alerts, secure scores", "value": "SecurityEvents.Read.All" },
+                  { "label": "SecurityIncident.Read.All — Defender XDR incidents", "value": "SecurityIncident.Read.All" },
+                  { "label": "Directory.Read.All — directory objects for enrichment", "value": "Directory.Read.All" },
+                  { "label": "IdentityRiskEvent.Read.All — ID Protection risk detections", "value": "IdentityRiskEvent.Read.All" },
+                  { "label": "IdentityRiskyUser.Read.All — risky users", "value": "IdentityRiskyUser.Read.All" },
+                  { "label": "IdentityRiskyServicePrincipal.Read.All — risky workload identities", "value": "IdentityRiskyServicePrincipal.Read.All" },
+                  { "label": "ThreatHunting.Read.All — Defender XDR advanced hunting", "value": "ThreatHunting.Read.All" },
+                  { "label": "User.Read.All — identity model enrichment", "value": "User.Read.All" },
+                  { "label": "Group.Read.All — group membership enrichment", "value": "Group.Read.All" },
+                  { "label": "Device.Read.All — asset model enrichment", "value": "Device.Read.All" },
+                  { "label": "AuditLogsQuery.Read.All — unified audit via Graph (extra)", "value": "AuditLogsQuery.Read.All" },
+                  { "label": "ThreatIndicators.Read.All — Defender TI indicators (extra)", "value": "ThreatIndicators.Read.All" },
+                  { "label": "ThreatIntelligence.Read.All — Defender TI feed (extra)", "value": "ThreatIntelligence.Read.All" },
+                  { "label": "Policy.Read.All — Conditional Access posture (extra)", "value": "Policy.Read.All" },
+                  { "label": "IdentityRiskyAgent.Read.All — agent identity risk, 2026 (extra)", "value": "IdentityRiskyAgent.Read.All" },
+                  { "label": "SecurityIdentitiesSensors.Read.All — Defender for Identity sensor health (extra)", "value": "SecurityIdentitiesSensors.Read.All" },
+                  { "label": "RoleManagementAlert.Read.Directory — PIM alerts (extra)", "value": "RoleManagementAlert.Read.Directory" },
+                  { "label": "AttackSimulation.Read.All — phishing-training results (extra)", "value": "AttackSimulation.Read.All" }
+                ]
+              },
+              "visible": true
+            },
+            {
+              "name": "secretMonths",
+              "type": "Microsoft.Common.Slider",
+              "label": "Client-secret lifetime (months)",
+              "subLabel": "months",
+              "defaultValue": 12,
+              "min": 1,
+              "max": 24,
+              "showStepMarkers": false,
+              "toolTip": "A secret is minted only when none exists or the existing one expires within 30 days, so policy re-evaluation never breaks a live credential.",
+              "visible": true
+            },
+            {
+              "name": "subscriptionRoleDefinitionIds",
+              "type": "Microsoft.Common.DropDown",
+              "label": "Azure RBAC granted on each target subscription",
+              "multiselect": true,
+              "filter": true,
+              "defaultValue": [
+                "Reader",
+                "Azure Event Hubs Data Receiver"
+              ],
+              "toolTip": "The ONLY real per-subscription boundary, since Graph permissions cannot be scoped to a subscription.",
+              "constraints": {
+                "required": true,
+                "allowedValues": [
+                  { "label": "Reader", "value": "acdd72a7-3385-48ef-bd42-f606fba81ae7" },
+                  { "label": "Azure Event Hubs Data Receiver", "value": "a638d3c7-ab3a-418d-83e6-5f17a39d4fde" },
+                  { "label": "Storage Blob Data Reader", "value": "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1" },
+                  { "label": "Monitoring Reader", "value": "43d0d8ad-25c7-4714-9337-8ba259a9fe05" }
+                ]
+              },
+              "visible": true
+            },
+            {
+              "name": "useTagGate",
+              "type": "Microsoft.Common.CheckBox",
+              "label": "Only target subscriptions carrying an opt-in tag (strongly recommended)",
+              "defaultValue": true,
+              "toolTip": "Without a gate, EVERY subscription in the management group is targeted. The tag makes onboarding an explicit, auditable decision per subscription.",
+              "constraints": {
+                "required": false
+              },
+              "visible": true
+            },
+            {
+              "name": "tagName",
+              "type": "Microsoft.Common.TextBox",
+              "label": "Tag name",
+              "defaultValue": "abstract-onboard",
+              "visible": "[steps('app').useTagGate]",
+              "constraints": {
+                "required": "[steps('app').useTagGate]",
+                "regex": "^[a-zA-Z0-9-_]{1,50}$",
+                "validationMessage": "1-50 characters: letters, numbers, hyphens, underscores."
+              }
+            },
+            {
+              "name": "tagValue",
+              "type": "Microsoft.Common.TextBox",
+              "label": "Required tag value",
+              "defaultValue": "true",
+              "visible": "[steps('app').useTagGate]",
+              "constraints": {
+                "required": "[steps('app').useTagGate]",
+                "regex": "^[a-zA-Z0-9-_.]{1,50}$",
+                "validationMessage": "1-50 characters."
+              }
+            },
+            {
+              "name": "noGateWarning",
+              "type": "Microsoft.Common.InfoBox",
+              "visible": "[not(steps('app').useTagGate)]",
+              "options": {
+                "icon": "Warning",
+                "text": "NO TAG GATE — every subscription in the management group, now and in future, will receive an Entra app registration and a client secret. That is a large number of tier-0 credentials created with no per-subscription decision. Reconsider."
+              }
+            },
+            {
+              "name": "scriptResourceGroup",
+              "type": "Microsoft.Common.TextBox",
+              "label": "Resource group for the deploymentScript",
+              "defaultValue": "rg-abstract-appreg",
+              "toolTip": "Created in each target subscription to host the script and its storage account. Nothing sensitive lands here — secrets go straight to the central vault. Microsoft.ContainerInstance and Microsoft.Storage must be registered in each target subscription.",
+              "constraints": {
+                "required": true,
+                "regex": "^[a-zA-Z0-9._()-]{1,90}$",
+                "validationMessage": "1-90 characters, valid resource group name."
+              },
+              "visible": true
+            }
+          ]
+        },
+        {
+          "name": "after",
+          "label": "After deployment",
+          "description": "Three things must happen after this deployment, or nothing is onboarded.",
+          "elements": [
+            {
+              "name": "step1",
+              "type": "Microsoft.Common.InfoBox",
+              "visible": true,
+              "options": {
+                "icon": "Warning",
+                "text": "STEP 1 — Grant the assignment identity Owner on the target subscriptions (it assigns RBAC there, which Contributor cannot do) and Key Vault Secrets Officer on the central vault. The Outputs tab lists the principal ID."
+              }
+            },
+            {
+              "name": "step2",
+              "type": "Microsoft.Common.InfoBox",
+              "visible": true,
+              "options": {
+                "icon": "Warning",
+                "text": "STEP 2 — Read Policy > Compliance while still in report-only. It names exactly which subscriptions would be onboarded. Only then re-deploy in Enforce mode."
+              }
+            },
+            {
+              "name": "step3",
+              "type": "Microsoft.Common.InfoBox",
+              "visible": true,
+              "options": {
+                "icon": "Warning",
+                "text": "STEP 3 — DeployIfNotExists fires only on subscription create or update. Existing subscriptions stay untouched until you run a remediation task: ./scripts/Deploy-AbstractAppReg.sh -a Remediate -m <mg-id>. Watch the first remediated subscription closely — each one runs a privileged container.",
+                "uri": "https://learn.microsoft.com/azure/governance/policy/how-to/remediate-resources"
+              }
+            },
+            {
+              "name": "step4",
+              "type": "Microsoft.Common.InfoBox",
+              "visible": true,
+              "options": {
+                "icon": "Info",
+                "text": "AUDIT — ./scripts/Deploy-AbstractAppReg.sh -a Status lists the identity, its consent, every Abstract app and every secret with its expiry. -a Verify --app-id <id> re-checks one app and names any missing permission, so \"consent looks fine but Abstract gets 403\" is a one-command diagnosis."
+              }
+            },
+            {
+              "name": "gapNote",
+              "type": "Microsoft.Common.InfoBox",
+              "visible": true,
+              "options": {
+                "icon": "Info",
+                "text": "KNOWN GAP — nothing here rotates secrets on a schedule; it only avoids churning them. Scheduled rotation plus an Abstract-side credential update is not built yet."
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "outputs": {
+      "kind": "ManagementGroup",
+      "managementGroupId": "[steps('basics').resourceScope.managementGroup.id]",
+      "location": "[steps('basics').resourceScope.location.name]",
+      "parameters": {
+        "namePrefix": "[steps('basics').namePrefix]",
+        "assignmentLocation": "[steps('basics').resourceScope.location.name]",
+        "effect": "[if(equals(steps('basics').rolloutMode, 'audit'), 'AuditIfNotExists', 'DeployIfNotExists')]",
+        "enforcementMode": "[if(equals(steps('basics').rolloutMode, 'audit'), 'DoNotEnforce', 'Default')]",
+        "managedIdentityResourceId": "[steps('identity').managedIdentityResourceId]",
+        "managedIdentityClientId": "[steps('identity').managedIdentityClientId]",
+        "centralKeyVaultName": "[steps('identity').centralKeyVaultName]",
+        "centralKeyVaultResourceGroup": "[steps('identity').centralKeyVaultResourceGroup]",
+        "centralKeyVaultSubscriptionId": "[steps('identity').centralKeyVaultSubscriptionId]",
+        "appNamePattern": "[steps('app').appNamePattern]",
+        "graphPermissions": "[steps('app').graphPermissions]",
+        "secretMonths": "[steps('app').secretMonths]",
+        "subscriptionRoleDefinitionIds": "[steps('app').subscriptionRoleDefinitionIds]",
+        "scriptResourceGroup": "[steps('app').scriptResourceGroup]",
+        "tagName": "[if(steps('app').useTagGate, steps('app').tagName, '')]",
+        "tagValue": "[if(steps('app').useTagGate, steps('app').tagValue, '')]"
+      }
+    }
+  }
+}

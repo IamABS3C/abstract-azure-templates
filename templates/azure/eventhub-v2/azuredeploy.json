@@ -1,0 +1,618 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "2.0.0.0",
+  "metadata": {
+    "_generator": { "name": "Abstract Security - Solutions Engineering", "version": "2.0" },
+    "description": "Deploys the complete Azure infrastructure required by the Abstract Security 'Azure Event Hub' integration: Event Hubs namespace, one or many Event Hubs, the 'abstract' consumer group, a checkpoint Storage Account + private blob container, Connection String (SAS) and/or Service Principal (RBAC) authentication, optional IP allowlist / Private Endpoints / Safe Mode guardrails, and namespace diagnostics. No secrets are ever emitted in outputs."
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": { "description": "Azure region for all resources. Event Hubs must be in the same region as the resources being monitored when those resources are regional." }
+    },
+    "namespaceName": {
+      "type": "string",
+      "minLength": 6,
+      "maxLength": 50,
+      "metadata": { "description": "Event Hubs namespace name - globally unique, 6-50 chars, letters/numbers/hyphens, must start with a letter." }
+    },
+    "sku": {
+      "type": "string",
+      "defaultValue": "Standard",
+      "allowedValues": ["Basic", "Standard", "Premium"],
+      "metadata": { "description": "Namespace pricing tier. Abstract requires STANDARD as the minimum tier (Basic lacks custom consumer groups, IP firewall and >1 day retention; it is allowed here only for lab scenarios)." }
+    },
+    "capacity": {
+      "type": "int",
+      "defaultValue": 1,
+      "minValue": 1,
+      "maxValue": 40,
+      "metadata": { "description": "Throughput Units (Basic/Standard, 1-40) or Processing Units (Premium: 1, 2, 4, 8, 16). Sizing per Abstract docs: ~1 TU per 1 MB/s of expected ingress (1 MB/s = 1 TU; 10 MB/s = 10 TU; 32 MB/s = 32 TU)." }
+    },
+    "autoInflate": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": { "description": "Enable Auto-Inflate so the namespace scales Throughput Units automatically with load (Standard tier only; ignored on Basic/Premium)." }
+    },
+    "maxThroughputUnits": {
+      "type": "int",
+      "defaultValue": 20,
+      "minValue": 1,
+      "maxValue": 40,
+      "metadata": { "description": "Auto-Inflate ceiling in Throughput Units (Standard only, max 40)." }
+    },
+    "minimumTlsVersion": {
+      "type": "string",
+      "defaultValue": "1.2",
+      "allowedValues": ["1.0", "1.1", "1.2"],
+      "metadata": { "description": "Minimum TLS version the namespace accepts. Leave at 1.2 unless a legacy producer forces otherwise." }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": { "description": "Tags applied to every resource created by this template." }
+    },
+    "autoHubNaming": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": { "description": "true = generate hub names as <hubPrefix>-<environment>-<source> from hubSources; false = use the eventHubs array verbatim." }
+    },
+    "hubPrefix": {
+      "type": "string",
+      "defaultValue": "abs",
+      "metadata": { "description": "Prefix for auto-generated hub names (e.g. 'abs' -> abs-prod-entra)." }
+    },
+    "environment": {
+      "type": "string",
+      "defaultValue": "prod",
+      "metadata": { "description": "Environment token used in auto-generated hub names (prod, staging, dev, ...)." }
+    },
+    "hubSources": {
+      "type": "array",
+      "defaultValue": ["activity", "entra", "defender"],
+      "metadata": { "description": "Log sources - one Event Hub is generated per entry when autoHubNaming = true. Typical sources: activity (Azure Activity Log), entra (Entra ID sign-in/audit), defender (Defender XDR streaming), m365, resource (Azure Resource Logs)." }
+    },
+    "eventHubs": {
+      "type": "array",
+      "defaultValue": [
+        { "name": "default-hub", "partitionCount": 4, "retentionDays": 7 }
+      ],
+      "metadata": { "description": "Explicit hub definitions, used only when autoHubNaming = false: [{ name, partitionCount, retentionDays }]." }
+    },
+    "defaultPartitionCount": {
+      "type": "int",
+      "defaultValue": 4,
+      "minValue": 1,
+      "maxValue": 32,
+      "metadata": { "description": "Partition count for auto-generated hubs. Abstract docs recommend AT LEAST 4. Partitions cannot be reduced after creation; max 32 on Standard." }
+    },
+    "defaultRetentionDays": {
+      "type": "int",
+      "defaultValue": 7,
+      "minValue": 1,
+      "maxValue": 7,
+      "metadata": { "description": "Message retention in days for auto-generated hubs. Size this to ride out ingestion downtime/delay (Abstract docs). Standard allows 1-7; Basic is forced to 1." }
+    },
+    "consumerGroupName": {
+      "type": "string",
+      "defaultValue": "abstract",
+      "metadata": { "description": "Consumer group created on every hub for the Abstract platform. Enter this value in the 'Event Hub Consumer Group' field of the Abstract integration. Ignored on Basic SKU (only $Default exists there)." }
+    },
+    "enableSas": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": { "description": "Create SAS authorization rules for Connection String authentication in Abstract. When false, local (SAS) auth is fully DISABLED on the namespace and only Entra ID / RBAC works." }
+    },
+    "sasRuleName": {
+      "type": "string",
+      "defaultValue": "abstract-access",
+      "metadata": { "description": "Name of the least-privilege SAS rule created at namespace level (and per hub when perHubSasRules = true). Prefer this over RootManageSharedAccessKey when pasting a connection string into Abstract." }
+    },
+    "sasRights": {
+      "type": "array",
+      "defaultValue": ["Listen"],
+      "metadata": { "description": "Rights for the SAS rule. Listen is all Abstract needs to consume; include Send only if log producers will share the same rule." }
+    },
+    "perHubSasRules": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": { "description": "Also create a per-hub SAS rule with the same name/rights - a tighter blast radius than the namespace-level rule." }
+    },
+    "enableRbac": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": { "description": "Assign Azure RBAC roles for Service Principal (role-based) authentication in Abstract: Event Hubs role on the namespace + Storage Blob Data role on the checkpoint storage account." }
+    },
+    "principalId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": { "description": "Object ID of the service principal (or managed identity) Abstract will authenticate as. Find it on the Enterprise Application blade - this is the SP object ID, NOT the app/client ID." }
+    },
+    "roleDefinitionName": {
+      "type": "string",
+      "defaultValue": "Azure Event Hubs Data Receiver",
+      "allowedValues": ["Azure Event Hubs Data Sender", "Azure Event Hubs Data Receiver", "Azure Event Hubs Data Owner"],
+      "metadata": { "description": "Built-in Event Hubs data-plane role assigned on the namespace. Abstract docs specify Azure Event Hubs Data Receiver." }
+    },
+    "storageRoleDefinitionName": {
+      "type": "string",
+      "defaultValue": "Storage Blob Data Contributor",
+      "allowedValues": ["Storage Blob Data Contributor", "Storage Blob Data Owner"],
+      "metadata": { "description": "Built-in Storage data-plane role assigned on the checkpoint storage account. Abstract docs specify Storage Blob Data Contributor." }
+    },
+    "principalType": {
+      "type": "string",
+      "defaultValue": "ServicePrincipal",
+      "allowedValues": ["ServicePrincipal", "User", "Group"],
+      "metadata": { "description": "Type of the principal being granted RBAC (setting this avoids PrincipalNotFound failures from directory replication delay on freshly created SPNs)." }
+    },
+    "createStorageAccount": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": { "description": "Create the checkpoint Storage Account + blob container required by the Abstract integration. Set false only if you will point Abstract at an existing storage account you manage yourself." }
+    },
+    "storageAccountName": {
+      "type": "string",
+      "defaultValue": "",
+      "maxLength": 24,
+      "metadata": { "description": "Checkpoint storage account name (3-24 lowercase letters/numbers, globally unique). Leave EMPTY to auto-generate a unique name (abs<hash>)." }
+    },
+    "storageSkuName": {
+      "type": "string",
+      "defaultValue": "Standard_LRS",
+      "allowedValues": ["Standard_LRS", "Standard_ZRS", "Standard_GRS", "Standard_RAGRS"],
+      "metadata": { "description": "Replication SKU for the checkpoint storage account. LRS is sufficient - checkpoints are rebuildable consumer state, not log data." }
+    },
+    "blobContainerName": {
+      "type": "string",
+      "defaultValue": "abstract-checkpoints",
+      "minLength": 3,
+      "maxLength": 63,
+      "metadata": { "description": "Private blob container that stores Event Hub processing checkpoints. Enter this value in the 'Storage Blob Container Name' field of the Abstract integration. Lowercase letters, numbers and dashes." }
+    },
+    "storageAllowSharedKeyAccess": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": { "description": "Allow shared-key (connection string) access on the storage account. REQUIRED true for Connection String authentication in Abstract. Set false only for pure Service Principal deployments." }
+    },
+    "storageApplyIpRules": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": { "description": "Mirror the Event Hub IP allowlist onto the storage account firewall. NOTE: the storage firewall rejects /31 and /32 prefixes - list single addresses as bare IPs." }
+    },
+    "createStoragePrivateEndpoint": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": { "description": "Also create a Private Endpoint (blob sub-resource) for the checkpoint storage account when private networking is used." }
+    },
+    "storageBlobPrivateDnsZoneId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": { "description": "Resource ID of the privatelink.blob.core.windows.net Private DNS zone (recommended with the storage Private Endpoint)." }
+    },
+    "enablePrivateEndpoint": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": { "description": "Create a Private Endpoint for the Event Hubs namespace (Standard/Premium only)." }
+    },
+    "subnetId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": { "description": "Resource ID of the subnet that will host the Private Endpoint NIC(s)." }
+    },
+    "privateDnsZoneId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": { "description": "Resource ID of the privatelink.servicebus.windows.net Private DNS zone (recommended with the namespace Private Endpoint)." }
+    },
+    "allowedIpRanges": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": { "description": "Public IP ranges (CIDR) allowed through the namespace firewall - e.g. Abstract egress IPs plus your admin ranges. A non-empty list flips the firewall default action to Deny (unless Safe Mode is on). Empty entries are filtered out automatically." }
+    },
+    "allowAzureServices": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": { "description": "Allow trusted Microsoft services (Azure Monitor diagnostic settings, Defender streaming, ...) through the firewall. REQUIRED when the firewall is in Deny mode and Azure services stream logs into these hubs." }
+    },
+    "disablePublicNetwork": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": { "description": "Disable ALL public network access on the namespace (Private Endpoint only). Only honored when safeMode = false." }
+    },
+    "safeMode": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": { "description": "Safe Mode guardrails for external SaaS ingestion (Abstract). true -> public network access stays ON for BOTH the namespace and the checkpoint storage account, the IP allowlist is ignored, and the firewall default action stays Allow; Private Endpoints may still be created (hybrid) but can never lock Abstract out. false -> disablePublicNetwork / allowedIpRanges are honored exactly as set. Ship customers safeMode=true for onboarding; flip to false in a hardening phase." }
+    },
+    "enableDiagnostics": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": { "description": "Enable diagnostic settings on the namespace so you can monitor the health of the log pipeline itself." }
+    },
+    "logAnalyticsWorkspaceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": { "description": "Resource ID of the Log Analytics workspace for namespace diagnostics." }
+    },
+    "storageAccountId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": { "description": "Optional storage account resource ID for diagnostics archive (this is for namespace diagnostics - NOT the checkpoint storage account)." }
+    }
+  },
+  "variables": {
+    "isStandard": "[equals(parameters('sku'), 'Standard')]",
+    "isBasic": "[equals(parameters('sku'), 'Basic')]",
+    "cleanedSources": "[filter(map(parameters('hubSources'), lambda('s', trim(string(lambdaVariables('s'))))), lambda('s', not(empty(lambdaVariables('s')))))]",
+    "generatedHubs": "[map(variables('cleanedSources'), lambda('src', createObject('name', toLower(format('{0}-{1}-{2}', parameters('hubPrefix'), parameters('environment'), lambdaVariables('src'))), 'partitionCount', parameters('defaultPartitionCount'), 'retentionDays', if(variables('isBasic'), 1, parameters('defaultRetentionDays')))))]",
+    "effectiveHubs": "[if(parameters('autoHubNaming'), variables('generatedHubs'), parameters('eventHubs'))]",
+    "cleanedIpRanges": "[filter(parameters('allowedIpRanges'), lambda('ip', not(empty(trim(string(lambdaVariables('ip')))))))]",
+    "effectivePublicAccess": "[if(parameters('safeMode'), 'Enabled', if(parameters('disablePublicNetwork'), 'Disabled', 'Enabled'))]",
+    "effectiveIpRules": "[if(parameters('safeMode'), createArray(), variables('cleanedIpRanges'))]",
+    "lockedDown": "[and(not(parameters('safeMode')), or(greater(length(variables('effectiveIpRules')), 0), parameters('disablePublicNetwork')))]",
+    "networkDefaultAction": "[if(variables('lockedDown'), 'Deny', 'Allow')]",
+    "storageNameEffective": "[if(empty(parameters('storageAccountName')), take(toLower(format('abs{0}', uniqueString(resourceGroup().id, parameters('namespaceName')))), 24), parameters('storageAccountName'))]",
+    "storageLockedDown": "[and(and(not(parameters('safeMode')), parameters('storageApplyIpRules')), greater(length(variables('effectiveIpRules')), 0))]",
+    "storagePublicAccess": "[if(parameters('safeMode'), 'Enabled', if(and(parameters('disablePublicNetwork'), parameters('createStoragePrivateEndpoint')), 'Disabled', 'Enabled'))]",
+    "roleMap": {
+      "Azure Event Hubs Data Sender": "2b629674-e913-4c01-ae53-ef4638d8f975",
+      "Azure Event Hubs Data Receiver": "a638d3c7-ab3a-418d-83e6-5f17a39d4fde",
+      "Azure Event Hubs Data Owner": "f526a384-b230-433a-b45c-95f59c4a2dec"
+    },
+    "storageRoleMap": {
+      "Storage Blob Data Contributor": "ba92f5b4-2d11-453d-a403-e96b0029c9fe",
+      "Storage Blob Data Owner": "b7e6dc6d-f1e8-4753-8033-0f276bb0955b"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.EventHub/namespaces",
+      "apiVersion": "2024-01-01",
+      "name": "[parameters('namespaceName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "sku": {
+        "name": "[parameters('sku')]",
+        "tier": "[parameters('sku')]",
+        "capacity": "[parameters('capacity')]"
+      },
+      "properties": {
+        "minimumTlsVersion": "[parameters('minimumTlsVersion')]",
+        "publicNetworkAccess": "[variables('effectivePublicAccess')]",
+        "disableLocalAuth": "[not(parameters('enableSas'))]",
+        "isAutoInflateEnabled": "[and(variables('isStandard'), parameters('autoInflate'))]",
+        "maximumThroughputUnits": "[if(and(variables('isStandard'), parameters('autoInflate')), parameters('maxThroughputUnits'), 0)]"
+      }
+    },
+    {
+      "condition": "[not(variables('isBasic'))]",
+      "type": "Microsoft.EventHub/namespaces/networkRuleSets",
+      "apiVersion": "2024-01-01",
+      "name": "[format('{0}/default', parameters('namespaceName'))]",
+      "properties": {
+        "publicNetworkAccess": "[variables('effectivePublicAccess')]",
+        "defaultAction": "[variables('networkDefaultAction')]",
+        "trustedServiceAccessEnabled": "[parameters('allowAzureServices')]",
+        "virtualNetworkRules": [],
+        "ipRules": "[map(variables('effectiveIpRules'), lambda('ip', createObject('ipMask', lambdaVariables('ip'), 'action', 'Allow')))]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName'))]"
+      ]
+    },
+    {
+      "copy": { "name": "hubs", "count": "[length(variables('effectiveHubs'))]" },
+      "type": "Microsoft.EventHub/namespaces/eventhubs",
+      "apiVersion": "2024-01-01",
+      "name": "[format('{0}/{1}', parameters('namespaceName'), variables('effectiveHubs')[copyIndex()].name)]",
+      "properties": {
+        "partitionCount": "[variables('effectiveHubs')[copyIndex()].partitionCount]",
+        "messageRetentionInDays": "[variables('effectiveHubs')[copyIndex()].retentionDays]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName'))]"
+      ]
+    },
+    {
+      "condition": "[not(variables('isBasic'))]",
+      "copy": { "name": "consumerGroups", "count": "[length(variables('effectiveHubs'))]" },
+      "type": "Microsoft.EventHub/namespaces/eventhubs/consumergroups",
+      "apiVersion": "2024-01-01",
+      "name": "[format('{0}/{1}/{2}', parameters('namespaceName'), variables('effectiveHubs')[copyIndex()].name, parameters('consumerGroupName'))]",
+      "properties": {},
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces/eventhubs', parameters('namespaceName'), variables('effectiveHubs')[copyIndex()].name)]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableSas')]",
+      "type": "Microsoft.EventHub/namespaces/authorizationRules",
+      "apiVersion": "2024-01-01",
+      "name": "[format('{0}/{1}', parameters('namespaceName'), parameters('sasRuleName'))]",
+      "properties": {
+        "rights": "[parameters('sasRights')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName'))]"
+      ]
+    },
+    {
+      "condition": "[and(parameters('enableSas'), parameters('perHubSasRules'))]",
+      "copy": { "name": "hubAuthRules", "count": "[length(variables('effectiveHubs'))]" },
+      "type": "Microsoft.EventHub/namespaces/eventhubs/authorizationRules",
+      "apiVersion": "2024-01-01",
+      "name": "[format('{0}/{1}/{2}', parameters('namespaceName'), variables('effectiveHubs')[copyIndex()].name, parameters('sasRuleName'))]",
+      "properties": {
+        "rights": "[parameters('sasRights')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces/eventhubs', parameters('namespaceName'), variables('effectiveHubs')[copyIndex()].name)]"
+      ]
+    },
+    {
+      "condition": "[parameters('createStorageAccount')]",
+      "type": "Microsoft.Storage/storageAccounts",
+      "apiVersion": "2023-05-01",
+      "name": "[variables('storageNameEffective')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "kind": "StorageV2",
+      "sku": {
+        "name": "[parameters('storageSkuName')]"
+      },
+      "properties": {
+        "minimumTlsVersion": "TLS1_2",
+        "supportsHttpsTrafficOnly": true,
+        "allowBlobPublicAccess": false,
+        "allowSharedKeyAccess": "[parameters('storageAllowSharedKeyAccess')]",
+        "accessTier": "Hot",
+        "publicNetworkAccess": "[variables('storagePublicAccess')]",
+        "networkAcls": {
+          "defaultAction": "[if(variables('storageLockedDown'), 'Deny', 'Allow')]",
+          "bypass": "AzureServices",
+          "ipRules": "[map(if(variables('storageLockedDown'), variables('effectiveIpRules'), createArray()), lambda('ip', createObject('value', lambdaVariables('ip'), 'action', 'Allow')))]",
+          "virtualNetworkRules": []
+        }
+      }
+    },
+    {
+      "condition": "[parameters('createStorageAccount')]",
+      "type": "Microsoft.Storage/storageAccounts/blobServices",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/default', variables('storageNameEffective'))]",
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageNameEffective'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('createStorageAccount')]",
+      "type": "Microsoft.Storage/storageAccounts/blobServices/containers",
+      "apiVersion": "2023-05-01",
+      "name": "[format('{0}/default/{1}', variables('storageNameEffective'), parameters('blobContainerName'))]",
+      "properties": {
+        "publicAccess": "None"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts/blobServices', variables('storageNameEffective'), 'default')]"
+      ]
+    },
+    {
+      "condition": "[and(parameters('enableRbac'), not(empty(parameters('principalId'))))]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[format('Microsoft.EventHub/namespaces/{0}', parameters('namespaceName'))]",
+      "name": "[guid(resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName')), parameters('principalId'), variables('roleMap')[parameters('roleDefinitionName')])]",
+      "properties": {
+        "principalId": "[parameters('principalId')]",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('roleMap')[parameters('roleDefinitionName')])]",
+        "principalType": "[parameters('principalType')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName'))]"
+      ]
+    },
+    {
+      "condition": "[and(and(parameters('enableRbac'), not(empty(parameters('principalId')))), parameters('createStorageAccount'))]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[format('Microsoft.Storage/storageAccounts/{0}', variables('storageNameEffective'))]",
+      "name": "[guid(resourceId('Microsoft.Storage/storageAccounts', variables('storageNameEffective')), parameters('principalId'), variables('storageRoleMap')[parameters('storageRoleDefinitionName')])]",
+      "properties": {
+        "principalId": "[parameters('principalId')]",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('storageRoleMap')[parameters('storageRoleDefinitionName')])]",
+        "principalType": "[parameters('principalType')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageNameEffective'))]"
+      ]
+    },
+    {
+      "condition": "[and(parameters('enablePrivateEndpoint'), not(empty(parameters('subnetId'))))]",
+      "type": "Microsoft.Network/privateEndpoints",
+      "apiVersion": "2023-11-01",
+      "name": "[format('{0}-pe', parameters('namespaceName'))]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "subnet": {
+          "id": "[parameters('subnetId')]"
+        },
+        "privateLinkServiceConnections": [
+          {
+            "name": "eventhub-connection",
+            "properties": {
+              "privateLinkServiceId": "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName'))]",
+              "groupIds": ["namespace"]
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName'))]"
+      ]
+    },
+    {
+      "condition": "[and(and(parameters('enablePrivateEndpoint'), not(empty(parameters('subnetId')))), not(empty(parameters('privateDnsZoneId'))))]",
+      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+      "apiVersion": "2023-11-01",
+      "name": "[format('{0}-pe/default', parameters('namespaceName'))]",
+      "properties": {
+        "privateDnsZoneConfigs": [
+          {
+            "name": "eventhub-dns",
+            "properties": {
+              "privateDnsZoneId": "[parameters('privateDnsZoneId')]"
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe', parameters('namespaceName')))]"
+      ]
+    },
+    {
+      "condition": "[and(and(parameters('createStorageAccount'), parameters('createStoragePrivateEndpoint')), not(empty(parameters('subnetId'))))]",
+      "type": "Microsoft.Network/privateEndpoints",
+      "apiVersion": "2023-11-01",
+      "name": "[format('{0}-blob-pe', variables('storageNameEffective'))]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "subnet": {
+          "id": "[parameters('subnetId')]"
+        },
+        "privateLinkServiceConnections": [
+          {
+            "name": "blob-connection",
+            "properties": {
+              "privateLinkServiceId": "[resourceId('Microsoft.Storage/storageAccounts', variables('storageNameEffective'))]",
+              "groupIds": ["blob"]
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Storage/storageAccounts', variables('storageNameEffective'))]"
+      ]
+    },
+    {
+      "condition": "[and(and(and(parameters('createStorageAccount'), parameters('createStoragePrivateEndpoint')), not(empty(parameters('subnetId')))), not(empty(parameters('storageBlobPrivateDnsZoneId'))))]",
+      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+      "apiVersion": "2023-11-01",
+      "name": "[format('{0}-blob-pe/default', variables('storageNameEffective'))]",
+      "properties": {
+        "privateDnsZoneConfigs": [
+          {
+            "name": "blob-dns",
+            "properties": {
+              "privateDnsZoneId": "[parameters('storageBlobPrivateDnsZoneId')]"
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-blob-pe', variables('storageNameEffective')))]"
+      ]
+    },
+    {
+      "condition": "[and(parameters('enableDiagnostics'), or(not(empty(parameters('logAnalyticsWorkspaceId'))), not(empty(parameters('storageAccountId')))))]",
+      "type": "Microsoft.Insights/diagnosticSettings",
+      "apiVersion": "2021-05-01-preview",
+      "scope": "[format('Microsoft.EventHub/namespaces/{0}', parameters('namespaceName'))]",
+      "name": "[format('{0}-diagnostics', parameters('namespaceName'))]",
+      "properties": {
+        "workspaceId": "[if(empty(parameters('logAnalyticsWorkspaceId')), null(), parameters('logAnalyticsWorkspaceId'))]",
+        "storageAccountId": "[if(empty(parameters('storageAccountId')), null(), parameters('storageAccountId'))]",
+        "logs": [
+          {
+            "categoryGroup": "allLogs",
+            "enabled": true
+          }
+        ],
+        "metrics": [
+          {
+            "category": "AllMetrics",
+            "enabled": true
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "namespaceName": {
+      "type": "string",
+      "value": "[parameters('namespaceName')]"
+    },
+    "namespaceId": {
+      "type": "string",
+      "value": "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName'))]"
+    },
+    "namespaceFqdn": {
+      "type": "string",
+      "value": "[format('{0}.servicebus.windows.net', parameters('namespaceName'))]"
+    },
+    "eventHubNames": {
+      "type": "array",
+      "value": "[map(variables('effectiveHubs'), lambda('h', lambdaVariables('h').name))]"
+    },
+    "consumerGroup": {
+      "type": "string",
+      "value": "[if(variables('isBasic'), '$Default', parameters('consumerGroupName'))]"
+    },
+    "sasRuleName": {
+      "type": "string",
+      "value": "[if(parameters('enableSas'), parameters('sasRuleName'), '(local auth disabled - use RBAC)')]"
+    },
+    "storageAccountName": {
+      "type": "string",
+      "value": "[if(parameters('createStorageAccount'), variables('storageNameEffective'), '(not created)')]"
+    },
+    "storageAccountUrl": {
+      "type": "string",
+      "value": "[if(parameters('createStorageAccount'), reference(resourceId('Microsoft.Storage/storageAccounts', variables('storageNameEffective')), '2023-05-01').primaryEndpoints.blob, '(not created)')]"
+    },
+    "blobContainerName": {
+      "type": "string",
+      "value": "[if(parameters('createStorageAccount'), parameters('blobContainerName'), '(not created)')]"
+    },
+    "publicAccess": {
+      "type": "string",
+      "value": "[variables('effectivePublicAccess')]"
+    },
+    "firewallDefaultAction": {
+      "type": "string",
+      "value": "[variables('networkDefaultAction')]"
+    },
+    "safeModeEnabled": {
+      "type": "bool",
+      "value": "[parameters('safeMode')]"
+    },
+    "privateEndpointEnabled": {
+      "type": "bool",
+      "value": "[parameters('enablePrivateEndpoint')]"
+    },
+    "abstractOnboarding": {
+      "type": "object",
+      "metadata": { "description": "Field-for-field answers for the Abstract integration modal (docs.abstract.security -> Azure Event Hub -> Event Hub Connection Details). No secrets - retrieval pointers only." },
+      "value": {
+        "authenticationMethods": {
+          "connectionString": "[parameters('enableSas')]",
+          "servicePrincipal": "[parameters('enableRbac')]"
+        },
+        "eventHubName": "[format('(one integration per hub) {0}', join(map(variables('effectiveHubs'), lambda('h', string(lambdaVariables('h').name))), ', '))]",
+        "eventHubConsumerGroup": "[if(variables('isBasic'), '$Default', parameters('consumerGroupName'))]",
+        "storageBlobContainerName": "[if(parameters('createStorageAccount'), parameters('blobContainerName'), '(bring your own)')]",
+        "eventHubNamespaceFqdn": "[format('{0}.servicebus.windows.net', parameters('namespaceName'))]",
+        "storageAccountUrl": "[if(parameters('createStorageAccount'), reference(resourceId('Microsoft.Storage/storageAccounts', variables('storageNameEffective')), '2023-05-01').primaryEndpoints.blob, '(bring your own)')]",
+        "eventHubConnectionString": "[if(parameters('enableSas'), format('Portal: Event Hubs Namespace > Shared access policies > {0} > Connection string-primary key (or run the companion script with -Action Credentials)', parameters('sasRuleName')), '(SAS disabled)')]",
+        "storageAccountConnectionString": "[if(and(parameters('createStorageAccount'), parameters('storageAllowSharedKeyAccess')), 'Portal: Storage Account > Security + networking > Access keys > Connection string (or run the companion script with -Action Credentials)', '(shared key access disabled)')]",
+        "docs": "https://docs.abstract.security -> Integrations -> Azure Event Hub"
+      }
+    }
+  }
+}

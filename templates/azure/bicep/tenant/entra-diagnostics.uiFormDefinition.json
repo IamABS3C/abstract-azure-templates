@@ -1,0 +1,183 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2021-09-09/uiFormDefinition.schema.json#",
+  "view": {
+    "kind": "Form",
+    "properties": {
+      "title": "Abstract Security — Microsoft Entra ID log streams",
+      "steps": [
+        {
+          "name": "basics",
+          "label": "Basics",
+          "description": "Streams Microsoft Entra ID activity logs — sign-ins, directory audit, provisioning, Identity Protection risk, Microsoft Graph activity — to an Abstract Event Hub.\n\n**This is a TENANT-scope deployment.** One setting covers the entire organisation; adding a subscription later changes nothing here. That is also why **no Azure Policy can manage this**: Entra diagnostic settings are not per-subscription objects, so there is nothing for a `DeployIfNotExists` policy to evaluate. This form *is* the automation.\n\n**You need Security Administrator** on the Entra tenant (plus Attribute Log Administrator if you enable the custom-security-attribute category).",
+          "elements": [
+            {
+              "name": "scopeWarning",
+              "type": "Microsoft.Common.InfoBox",
+              "visible": true,
+              "options": {
+                "icon": "Warning",
+                "text": "Tenant-scope deployments require elevated rights and the portal may refuse if your account cannot deploy at tenant scope. The guaranteed path is the CLI: az deployment tenant create --location eastus --template-file templates/tenant/entra-diagnostics.bicep",
+                "uri": "https://learn.microsoft.com/azure/azure-resource-manager/templates/deploy-to-tenant"
+              }
+            },
+            {
+              "name": "resourceScope",
+              "type": "Microsoft.Common.ResourceScope",
+              "location": {
+                "label": "Deployment metadata region",
+                "toolTip": "Where the tenant deployment record is stored. Entra logs are not regional, so this does not affect collection."
+              }
+            },
+            {
+              "name": "settingName",
+              "type": "Microsoft.Common.TextBox",
+              "label": "Diagnostic setting name",
+              "defaultValue": "abstract-entra-logstream",
+              "toolTip": "Entra allows multiple diagnostic settings, so this can sit alongside a setting already feeding another SIEM without displacing it.",
+              "constraints": {
+                "required": true,
+                "regex": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,258}[a-zA-Z0-9]$",
+                "validationMessage": "2-260 characters, starting and ending alphanumeric."
+              },
+              "visible": true
+            }
+          ]
+        },
+        {
+          "name": "hub",
+          "label": "Event Hub",
+          "description": "Where Entra ID logs are delivered.",
+          "elements": [
+            {
+              "name": "hubAdvice",
+              "type": "Microsoft.Common.InfoBox",
+              "visible": true,
+              "options": {
+                "icon": "Info",
+                "text": "Give identity telemetry its OWN hub. Sign-in and Graph-activity volume is high and bursty; a dedicated hub can be partitioned and scaled independently of resource logs, and a backlog on one stream then cannot delay the other."
+              }
+            },
+            {
+              "name": "eventHubAuthorizationRuleId",
+              "type": "Microsoft.Common.TextBox",
+              "label": "Event Hubs authorization rule ID",
+              "placeholder": "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.EventHub/namespaces/<ns>/authorizationrules/abstract-diagnostics-send",
+              "toolTip": "Namespace-level rule with Send rights — the abstractDiagnosticsAuthRuleId output of the Event Hub source template.",
+              "constraints": {
+                "required": true,
+                "regex": "^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.EventHub/namespaces/[^/]+/[Aa]uthorization[Rr]ules/[^/]+$",
+                "validationMessage": "Must be a full namespace-level authorization rule resource ID ending in /authorizationrules/<rule>."
+              },
+              "visible": true
+            },
+            {
+              "name": "eventHubName",
+              "type": "Microsoft.Common.TextBox",
+              "label": "Event Hub name",
+              "defaultValue": "abs-prod-entra",
+              "toolTip": "Must already exist. The source template's default hubSources list (activity/entra/defender) produces abs-prod-entra.",
+              "constraints": {
+                "required": true,
+                "regex": "^[a-zA-Z0-9]([a-zA-Z0-9._-]{0,254}[a-zA-Z0-9])?$",
+                "validationMessage": "1-256 characters: letters, numbers, periods, hyphens, underscores."
+              },
+              "visible": true
+            }
+          ]
+        },
+        {
+          "name": "categories",
+          "label": "Log categories",
+          "description": "Which Entra ID streams to collect. Selecting a category your tenant does not license is harmless — it simply produces no records.",
+          "elements": [
+            {
+              "name": "entraLogCategories",
+              "type": "Microsoft.Common.DropDown",
+              "label": "Entra ID log categories",
+              "multiselect": true,
+              "selectAll": true,
+              "filter": true,
+              "defaultValue": [
+                "AuditLogs",
+                "SignInLogs",
+                "NonInteractiveUserSignInLogs",
+                "ServicePrincipalSignInLogs",
+                "ManagedIdentitySignInLogs",
+                "ProvisioningLogs",
+                "ADFSSignInLogs",
+                "RiskyUsers",
+                "UserRiskEvents",
+                "RiskyServicePrincipals",
+                "ServicePrincipalRiskEvents",
+                "MicrosoftGraphActivityLogs"
+              ],
+              "toolTip": "The default set is what every Abstract Entra detection is built on. MicrosoftGraphActivityLogs is high volume but the single best source for 'what did this token actually do'.",
+              "constraints": {
+                "required": true,
+                "allowedValues": [
+                  { "label": "AuditLogs — directory changes (users, groups, apps, licences)", "value": "AuditLogs" },
+                  { "label": "SignInLogs — interactive user sign-ins (P1/P2)", "value": "SignInLogs" },
+                  { "label": "NonInteractiveUserSignInLogs — token/client sign-ins on behalf of a user (P1/P2)", "value": "NonInteractiveUserSignInLogs" },
+                  { "label": "ServicePrincipalSignInLogs — app/SP sign-ins (P1/P2)", "value": "ServicePrincipalSignInLogs" },
+                  { "label": "ManagedIdentitySignInLogs — managed identity sign-ins (P1/P2)", "value": "ManagedIdentitySignInLogs" },
+                  { "label": "ProvisioningLogs — only if you provision via Entra (Workday, ServiceNow…)", "value": "ProvisioningLogs" },
+                  { "label": "ADFSSignInLogs — only if AD FS is in use", "value": "ADFSSignInLogs" },
+                  { "label": "RiskyUsers — Identity Protection (P2)", "value": "RiskyUsers" },
+                  { "label": "UserRiskEvents — Identity Protection risk detections (P2)", "value": "UserRiskEvents" },
+                  { "label": "RiskyServicePrincipals — workload identity risk (P2)", "value": "RiskyServicePrincipals" },
+                  { "label": "ServicePrincipalRiskEvents — workload identity risk detections (P2)", "value": "ServicePrincipalRiskEvents" },
+                  { "label": "MicrosoftGraphActivityLogs — every Graph API call (high volume, high value)", "value": "MicrosoftGraphActivityLogs" },
+                  { "label": "RiskyAgents — agent identity risk (P2, 2026)", "value": "RiskyAgents" },
+                  { "label": "AgentRiskEvents — agent risk detections (P2, 2026)", "value": "AgentRiskEvents" },
+                  { "label": "NetworkAccessTrafficLogs — Global Secure Access only", "value": "NetworkAccessTrafficLogs" },
+                  { "label": "EnrichedOffice365AuditLogs — Entra Internet Access + enriched logs enabled", "value": "EnrichedOffice365AuditLogs" },
+                  { "label": "RemoteNetworkHealthLogs — Global Secure Access only", "value": "RemoteNetworkHealthLogs" },
+                  { "label": "MicrosoftServicePrincipalSignInLogs — preview, VERY high volume, first-party service-to-service", "value": "MicrosoftServicePrincipalSignInLogs" },
+                  { "label": "B2CRequestLogs — Azure AD B2C tenants only", "value": "B2CRequestLogs" }
+                ]
+              },
+              "visible": true
+            },
+            {
+              "name": "latencyWarning",
+              "type": "Microsoft.Common.InfoBox",
+              "visible": true,
+              "options": {
+                "icon": "Warning",
+                "text": "Entra diagnostic settings can take UP TO THREE DAYS to deliver their first records — Microsoft documents this. Do not treat an empty hub on day one as a failure, and do not redeploy repeatedly chasing it."
+              }
+            },
+            {
+              "name": "firstPartyWarning",
+              "type": "Microsoft.Common.InfoBox",
+              "visible": "[contains(steps('categories').entraLogCategories, 'MicrosoftServicePrincipalSignInLogs')]",
+              "options": {
+                "icon": "Warning",
+                "text": "MicrosoftServicePrincipalSignInLogs is first-party Microsoft service-to-service authentication. It is preview, extremely high volume, and Microsoft explicitly advises against acting on it (disabling apps based on it can cause tenant lock-out). Collect it only with a specific reason."
+              }
+            },
+            {
+              "name": "customAttrWarning",
+              "type": "Microsoft.Common.InfoBox",
+              "visible": true,
+              "options": {
+                "icon": "Info",
+                "text": "Not listed here: CustomSecurityAttributeAuditLogs. It is configured in a separate section of Entra diagnostic settings, needs the Attribute Log Administrator role, and Microsoft recommends keeping it in its own stream so attribute assignments are not revealed alongside the directory audit log."
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "outputs": {
+      "kind": "Tenant",
+      "location": "[steps('basics').resourceScope.location.name]",
+      "parameters": {
+        "settingName": "[steps('basics').settingName]",
+        "eventHubAuthorizationRuleId": "[steps('hub').eventHubAuthorizationRuleId]",
+        "eventHubName": "[steps('hub').eventHubName]",
+        "entraLogCategories": "[steps('categories').entraLogCategories]"
+      }
+    }
+  }
+}

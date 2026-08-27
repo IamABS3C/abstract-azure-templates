@@ -1,0 +1,86 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.44.1.10279",
+      "templateHash": "5582141834452033874"
+    }
+  },
+  "parameters": {
+    "settingName": {
+      "type": "string",
+      "defaultValue": "abstract-activity-logs",
+      "minLength": 1,
+      "maxLength": 260,
+      "metadata": {
+        "description": "Name of the subscription diagnostic setting (max 5 per subscription, unique name)."
+      }
+    },
+    "eventHubAuthorizationRuleId": {
+      "type": "string",
+      "metadata": {
+        "description": "Full resource ID of an Event Hubs namespace authorization rule with Send rights. Use the abstractDiagnosticsAuthRuleId output of the main template."
+      }
+    },
+    "eventHubName": {
+      "type": "string",
+      "defaultValue": "abs-prod-activity",
+      "metadata": {
+        "description": "Event Hub that receives the Activity Log stream. main.bicep auto-names hubs <hubPrefix>-<environment>-<source>, so the default source stack creates abs-prod-activity."
+      }
+    },
+    "categories": {
+      "type": "array",
+      "defaultValue": [
+        "Administrative",
+        "Security",
+        "ServiceHealth",
+        "Alert",
+        "Recommendation",
+        "Policy",
+        "Autoscale",
+        "ResourceHealth"
+      ],
+      "metadata": {
+        "description": "Activity Log categories to export. Default = all eight (recommended by Abstract Security)."
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Insights/diagnosticSettings",
+      "apiVersion": "2021-05-01-preview",
+      "name": "[parameters('settingName')]",
+      "properties": {
+        "copy": [
+          {
+            "name": "logs",
+            "count": "[length(parameters('categories'))]",
+            "input": {
+              "category": "[parameters('categories')[copyIndex('logs')]]",
+              "enabled": true
+            }
+          }
+        ],
+        "eventHubAuthorizationRuleId": "[parameters('eventHubAuthorizationRuleId')]",
+        "eventHubName": "[parameters('eventHubName')]"
+      }
+    }
+  ],
+  "outputs": {
+    "diagnosticSettingName": {
+      "type": "string",
+      "value": "[parameters('settingName')]"
+    },
+    "subscriptionId": {
+      "type": "string",
+      "value": "[subscription().subscriptionId]"
+    },
+    "exportedCategories": {
+      "type": "array",
+      "value": "[parameters('categories')]"
+    }
+  }
+}

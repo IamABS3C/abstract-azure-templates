@@ -1,0 +1,329 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/0.1.2-preview/CreateUIDefinition.MultiVm.json#",
+  "handler": "Microsoft.Azure.CreateUIDef",
+  "version": "0.1.2-preview",
+  "parameters": {
+    "config": {
+      "isWizard": true,
+      "basics": {
+        "description": "![Abstract Security](https://cybersecurity-excellence-awards.com/wp-content/uploads/163661.png)\n\n# ABSTRACT SECURITY\n**The Security Data Pipeline Platform.** Deliver enriched, normalized security events to any destination — in real time, at scale.\n\n[abstract.security](https://abstract.security) · [Documentation](https://docs.abstractsecurity.app/docs/integrations/) · [Book a demo](https://abstract.security)\n\n---\n### Per-subscription app registrations, automated\nCreates one Entra app registration per subscription for Abstract's Microsoft Graph and Microsoft 365 collection — app + service principal, **admin consent granted and verified**, client secret straight to Key Vault, Azure RBAC on the target subscription.\n\n**Read this first — one manual step is unavoidable.** This workflow acts through a user-assigned managed identity that must already hold Microsoft Graph `Application.ReadWrite.All` and `AppRoleAssignment.ReadWrite.All`, consented by a **Global Administrator**. Nothing can automate that grant: an identity able to assign app roles can grant *itself* anything in the directory, so automating it would be a privilege-escalation hole. Run `scripts/Deploy-AbstractAppReg.sh -a Bootstrap` once per tenant, then come back here.\n\n**Understand what \"per subscription\" really means.** Entra app registrations and their Graph permissions are **tenant**-level objects — Graph permissions cannot be scoped to a subscription. What this actually isolates per subscription is **Azure RBAC**. One app per subscription gives you separate credentials, separate RBAC and independent revocation; it does *not* partition Graph data access.\n\n**Why a workflow and not Azure Policy.** Azure Policy cannot create Entra objects — a `DeployIfNotExists` policy deploys an ARM template, and app registrations are not ARM resources. The policy variant in `templates/policy/` works around that by deploying a privileged container into every subscription. This path keeps the tier-0 identity in **one** place, gives you a single run history as the audit trail, and costs nothing per subscription. Prefer it unless governance mandates that everything arrive via Policy.\n\n**Verified against a live tenant (2026-08-03):** consent is confirmed by reading `appRoleAssignments` back from Graph, not by trusting the POST — so a shortfall returns HTTP 500 naming the exact count instead of silently leaving Abstract to hit 403s.",
+        "resourceGroup": {
+          "constraints": {
+            "validations": []
+          },
+          "allowExistingResourceGroup": true
+        }
+      }
+    },
+    "basics": [
+      {
+        "name": "bootstrapWarning",
+        "type": "Microsoft.Common.InfoBox",
+        "visible": true,
+        "options": {
+          "icon": "Warning",
+          "text": "PREREQUISITE — the managed identity below must already have Graph Application.ReadWrite.All + AppRoleAssignment.ReadWrite.All with admin consent. Without it every run fails at the first Graph call. Create and consent it with: ./scripts/Deploy-AbstractAppReg.sh -a Bootstrap -g <this-resource-group>",
+          "uri": "https://learn.microsoft.com/graph/permissions-reference"
+        }
+      },
+      {
+        "name": "workflowName",
+        "type": "Microsoft.Common.TextBox",
+        "label": "Workflow name",
+        "defaultValue": "abstract-appreg-onboarder",
+        "toolTip": "Name of the Logic App that performs the onboarding.",
+        "constraints": {
+          "required": true,
+          "regex": "^[a-zA-Z0-9][a-zA-Z0-9-_]{1,78}[a-zA-Z0-9]$",
+          "validationMessage": "3-80 chars: letters, numbers, hyphens, underscores."
+        }
+      },
+      {
+        "name": "identitySelector",
+        "type": "Microsoft.Solutions.ResourceSelector",
+        "label": "Graph-permissioned managed identity",
+        "toolTip": "The user-assigned managed identity created and consented by the Bootstrap step. Treat it as a tier-0 credential: it can grant itself any directory permission.",
+        "resourceType": "Microsoft.ManagedIdentity/userAssignedIdentities",
+        "options": {
+          "filter": {
+            "subscription": "onBasics",
+            "location": "onBasics"
+          }
+        },
+        "constraints": {
+          "required": true
+        }
+      },
+      {
+        "name": "keyVaultName",
+        "type": "Microsoft.Common.TextBox",
+        "label": "Central Key Vault name",
+        "toolTip": "Existing vault that receives every generated client secret. Deliberately central rather than one vault per subscription — scattering tier-0 secrets across the estate is worse, not better. Grant the identity Key Vault Secrets Officer on it.",
+        "placeholder": "e.g. kv-abstract-secrets",
+        "constraints": {
+          "required": true,
+          "regex": "^[a-zA-Z][a-zA-Z0-9-]{1,22}[a-zA-Z0-9]$",
+          "validationMessage": "3-24 chars, letters/numbers/hyphens, must start with a letter."
+        }
+      },
+      {
+        "name": "vaultNote",
+        "type": "Microsoft.Common.InfoBox",
+        "visible": true,
+        "options": {
+          "icon": "Info",
+          "text": "The vault must already exist and the identity needs write access to it. RBAC vault: grant Key Vault Secrets Officer. Access-policy vault: grant get/set/list on secrets. ./scripts/Deploy-AbstractAppReg.sh -a Grant -k <vault> detects which model the vault uses and does the right one."
+        }
+      }
+    ],
+    "steps": [
+      {
+        "name": "app",
+        "label": "App shape",
+        "elements": [
+          {
+            "name": "appNamePattern",
+            "type": "Microsoft.Common.TextBox",
+            "label": "App display-name pattern",
+            "defaultValue": "Abstract-{sub}",
+            "toolTip": "{sub} is replaced with the subscription ID. This is ALSO the idempotency key — the workflow reuses an app with a matching name rather than creating a duplicate, so re-running is safe.",
+            "constraints": {
+              "required": true,
+              "regex": "^.*\\{sub\\}.*$",
+              "validationMessage": "Must contain {sub} so each subscription gets a distinct app name."
+            }
+          },
+          {
+            "name": "permissionSet",
+            "type": "Microsoft.Common.OptionsGroup",
+            "label": "Graph permission set",
+            "defaultValue": "Abstract standard (recommended)",
+            "toolTip": "All names are verified to exist as Graph APPLICATION permissions. Note that 'Security.Read.All' is deliberately absent from every set here — it does not exist as an application permission, nor as a delegated scope, and requesting it silently produces a gap.",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                { "label": "Abstract standard (recommended)", "value": "standard" },
+                { "label": "Identity + audit only (minimal)", "value": "minimal" },
+                { "label": "Standard + Defender TI and posture extras", "value": "extended" }
+              ]
+            }
+          },
+          {
+            "name": "permissionPreview",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": "[equals(steps('app').permissionSet, 'standard')]",
+            "options": {
+              "icon": "Info",
+              "text": "Standard (12): AuditLog.Read.All · SecurityAlert.Read.All · SecurityEvents.Read.All · SecurityIncident.Read.All · Directory.Read.All · IdentityRiskEvent.Read.All · IdentityRiskyUser.Read.All · IdentityRiskyServicePrincipal.Read.All · ThreatHunting.Read.All · User.Read.All · Group.Read.All · Device.Read.All"
+            }
+          },
+          {
+            "name": "permissionPreviewMinimal",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": "[equals(steps('app').permissionSet, 'minimal')]",
+            "options": {
+              "icon": "Info",
+              "text": "Minimal (4): AuditLog.Read.All · SecurityAlert.Read.All · SecurityIncident.Read.All · Directory.Read.All. Enough for Entra sign-in/audit plus alerts and incidents. No advanced hunting, no identity-risk detail, no device or group enrichment."
+            }
+          },
+          {
+            "name": "permissionPreviewExtended",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": "[equals(steps('app').permissionSet, 'extended')]",
+            "options": {
+              "icon": "Info",
+              "text": "Extended (17) = the 12 standard, plus AuditLogsQuery.Read.All (unified audit via Graph) · ThreatIndicators.Read.All · ThreatIntelligence.Read.All · Policy.Read.All (Conditional Access posture) · IdentityRiskyAgent.Read.All (agent identity risk). Several need Entra ID P2 or Defender licensing; an unlicensed permission is harmless but returns no data."
+            }
+          },
+          {
+            "name": "secretMonths",
+            "type": "Microsoft.Common.Slider",
+            "label": "Client-secret lifetime (months)",
+            "subLabel": "months",
+            "defaultValue": 12,
+            "min": 1,
+            "max": 24,
+            "showStepMarkers": false,
+            "toolTip": "The workflow rotates a secret only when none exists or the existing one expires within 30 days, so re-running never breaks a live credential."
+          },
+          {
+            "name": "rbacRoles",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Azure RBAC granted on each target subscription",
+            "multiselect": true,
+            "filter": true,
+            "defaultValue": [
+              "Reader",
+              "Azure Event Hubs Data Receiver"
+            ],
+            "toolTip": "This is the ONLY real per-subscription boundary — Graph application permissions are tenant-wide and cannot be scoped to a subscription.",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                { "label": "Reader", "value": "acdd72a7-3385-48ef-bd42-f606fba81ae7" },
+                { "label": "Azure Event Hubs Data Receiver", "value": "a638d3c7-ab3a-418d-83e6-5f17a39d4fde" },
+                { "label": "Storage Blob Data Reader", "value": "2a2b9908-6ea1-4ae2-8e65-a410df84e7d1" },
+                { "label": "Monitoring Reader", "value": "43d0d8ad-25c7-4714-9337-8ba259a9fe05" }
+              ]
+            }
+          }
+        ]
+      },
+      {
+        "name": "trigger",
+        "label": "Trigger & scope",
+        "elements": [
+          {
+            "name": "triggerInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Warning",
+              "text": "Leave the event trigger OFF for the first deployment. Deploy, POST one subscription ID at the workflow, confirm the run succeeds, THEN enable it. A broken workflow wired to a live event source fails silently across the whole estate."
+            }
+          },
+          {
+            "name": "enableEventTrigger",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Create the Event Grid trigger now",
+            "defaultValue": false,
+            "toolTip": "When on, an Event Grid system topic is created for subscription events so new and newly-tagged subscriptions onboard themselves."
+          },
+          {
+            "name": "managementGroupId",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Management group to watch (optional)",
+            "defaultValue": "",
+            "toolTip": "Leave empty to watch the whole tenant root. Only used when the event trigger is enabled.",
+            "constraints": {
+              "required": false,
+              "regex": "^[a-zA-Z0-9-_().]{0,90}$",
+              "validationMessage": "Up to 90 chars, or leave empty for tenant root."
+            }
+          },
+          {
+            "name": "useTagGate",
+            "type": "Microsoft.Common.CheckBox",
+            "label": "Only onboard subscriptions carrying an opt-in tag (strongly recommended)",
+            "defaultValue": true,
+            "toolTip": "Without a gate, EVERY subscription that raises an event gets an app registration. The tag makes onboarding an explicit decision. A tag write also raises the event, so tagging an existing subscription onboards it."
+          },
+          {
+            "name": "tagName",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Tag name",
+            "defaultValue": "abstract-onboard",
+            "visible": "[steps('trigger').useTagGate]",
+            "constraints": {
+              "required": "[steps('trigger').useTagGate]",
+              "regex": "^[a-zA-Z0-9-_]{1,50}$",
+              "validationMessage": "1-50 chars: letters, numbers, hyphens, underscores."
+            }
+          },
+          {
+            "name": "tagValue",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Required tag value",
+            "defaultValue": "true",
+            "visible": "[steps('trigger').useTagGate]",
+            "constraints": {
+              "required": "[steps('trigger').useTagGate]",
+              "regex": "^[a-zA-Z0-9-_.]{1,50}$",
+              "validationMessage": "1-50 chars."
+            }
+          },
+          {
+            "name": "tagReadNote",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": "[steps('trigger').useTagGate]",
+            "options": {
+              "icon": "Info",
+              "text": "The workflow reads tags from /providers/Microsoft.Resources/tags/default, NOT from the subscription GET — verified on a live tenant that the subscription GET omits the tags property entirely for a Reader-level caller, which made the gate skip everything. If a run reports skipped-not-tagged with an empty tagsFound, the identity cannot read tags and needs at least Reader on that subscription."
+            }
+          },
+          {
+            "name": "noGateWarning",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": "[not(steps('trigger').useTagGate)]",
+            "options": {
+              "icon": "Warning",
+              "text": "NO TAG GATE: every subscription in scope will receive an app registration with a client secret. That is a lot of tier-0 credentials created without an explicit decision per subscription. Reconsider."
+            }
+          },
+          {
+            "name": "failureWebhookUrl",
+            "type": "Microsoft.Common.TextBox",
+            "label": "Failure webhook (optional)",
+            "defaultValue": "",
+            "toolTip": "Teams/Slack/ASTRO incoming webhook notified when an onboarding run fails or consent verification falls short. Creates an action group.",
+            "constraints": {
+              "required": false,
+              "regex": "^$|^https://.+",
+              "validationMessage": "Must be an https:// URL, or leave empty."
+            }
+          }
+        ]
+      },
+      {
+        "name": "after",
+        "label": "After deployment",
+        "elements": [
+          {
+            "name": "step1",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Warning",
+              "text": "STEP 1 — Grant the identity what it needs. Key Vault Secrets Officer on the vault, and Owner (or Contributor + User Access Administrator) on each target subscription, because the workflow assigns RBAC there. Run: ./scripts/Deploy-AbstractAppReg.sh -a Grant -g <rg> -k <vault> -s <subscription-id>"
+            }
+          },
+          {
+            "name": "step2",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Info",
+              "text": "STEP 2 — Test with ONE subscription before trusting it. ./scripts/Deploy-AbstractAppReg.sh -a Onboard -g <rg> -s <subscription-id>. A consent shortfall returns HTTP 500 with the exact verified/expected count and creates no secret, so nothing is left half-provisioned."
+            }
+          },
+          {
+            "name": "step3",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Info",
+              "text": "STEP 3 — Backfill and then automate. The same Onboard command onboards existing subscriptions; run it per subscription (or loop it). Once a manual run succeeds, redeploy with the event trigger enabled so future subscriptions onboard themselves."
+            }
+          },
+          {
+            "name": "step4",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Info",
+              "text": "STEP 4 — Audit what exists. ./scripts/Deploy-AbstractAppReg.sh -a Status shows the identity, its consent, every Abstract app and every secret with its expiry. -a Verify --app-id <id> re-checks one app and names any missing permission, so \"consent looks fine but Abstract gets 403\" is diagnosable in one command."
+            }
+          },
+          {
+            "name": "secretNote",
+            "type": "Microsoft.Common.InfoBox",
+            "options": {
+              "icon": "Info",
+              "text": "Secrets never appear in deployment outputs, workflow outputs or run history — the Key Vault write action has secureData set on both inputs and outputs. Read them from Key Vault, and give Abstract the value from there."
+            }
+          }
+        ]
+      }
+    ],
+    "outputs": {
+      "workflowName": "[basics('workflowName')]",
+      "location": "[location()]",
+      "managedIdentityResourceId": "[basics('identitySelector').id]",
+      "keyVaultName": "[basics('keyVaultName')]",
+      "appNamePattern": "[steps('app').appNamePattern]",
+      "secretMonths": "[steps('app').secretMonths]",
+      "subscriptionRoleDefinitionIds": "[steps('app').rbacRoles]",
+      "graphPermissions": "[if(equals(steps('app').permissionSet, 'minimal'), parse('[\"AuditLog.Read.All\",\"SecurityAlert.Read.All\",\"SecurityIncident.Read.All\",\"Directory.Read.All\"]'), if(equals(steps('app').permissionSet, 'extended'), parse('[\"AuditLog.Read.All\",\"SecurityAlert.Read.All\",\"SecurityEvents.Read.All\",\"SecurityIncident.Read.All\",\"Directory.Read.All\",\"IdentityRiskEvent.Read.All\",\"IdentityRiskyUser.Read.All\",\"IdentityRiskyServicePrincipal.Read.All\",\"ThreatHunting.Read.All\",\"User.Read.All\",\"Group.Read.All\",\"Device.Read.All\",\"AuditLogsQuery.Read.All\",\"ThreatIndicators.Read.All\",\"ThreatIntelligence.Read.All\",\"Policy.Read.All\",\"IdentityRiskyAgent.Read.All\"]'), parse('[\"AuditLog.Read.All\",\"SecurityAlert.Read.All\",\"SecurityEvents.Read.All\",\"SecurityIncident.Read.All\",\"Directory.Read.All\",\"IdentityRiskEvent.Read.All\",\"IdentityRiskyUser.Read.All\",\"IdentityRiskyServicePrincipal.Read.All\",\"ThreatHunting.Read.All\",\"User.Read.All\",\"Group.Read.All\",\"Device.Read.All\"]')))]",
+      "managementGroupId": "[steps('trigger').managementGroupId]",
+      "enableEventTrigger": "[steps('trigger').enableEventTrigger]",
+      "tagName": "[if(steps('trigger').useTagGate, steps('trigger').tagName, '')]",
+      "tagValue": "[if(steps('trigger').useTagGate, steps('trigger').tagValue, '')]",
+      "failureWebhookUrl": "[steps('trigger').failureWebhookUrl]"
+    }
+  }
+}

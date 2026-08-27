@@ -1,0 +1,445 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.44.1.10279",
+      "templateHash": "1375202228767846839"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region for all resources."
+      }
+    },
+    "namespaceName": {
+      "type": "string",
+      "minLength": 6,
+      "maxLength": 50,
+      "metadata": {
+        "description": "Event Hubs namespace name - globally unique, 6-50 chars, letters/numbers/hyphens, must start with a letter. Becomes <name>.servicebus.windows.net."
+      }
+    },
+    "sku": {
+      "type": "string",
+      "defaultValue": "Standard",
+      "allowedValues": [
+        "Standard",
+        "Premium"
+      ],
+      "metadata": {
+        "description": "Namespace pricing tier. Abstract requires Standard as the minimum tier."
+      }
+    },
+    "capacity": {
+      "type": "int",
+      "defaultValue": 1,
+      "minValue": 1,
+      "maxValue": 40,
+      "metadata": {
+        "description": "Throughput Units (Standard, 1-40) or Processing Units (Premium: 1, 2, 4, 8, 16)."
+      }
+    },
+    "autoInflate": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Enable Auto-Inflate so the namespace scales Throughput Units automatically (Standard tier only)."
+      }
+    },
+    "maxThroughputUnits": {
+      "type": "int",
+      "defaultValue": 20,
+      "minValue": 1,
+      "maxValue": 40,
+      "metadata": {
+        "description": "Auto-Inflate ceiling in Throughput Units (Standard only, max 40)."
+      }
+    },
+    "minimumTlsVersion": {
+      "type": "string",
+      "defaultValue": "1.2",
+      "allowedValues": [
+        "1.0",
+        "1.1",
+        "1.2"
+      ],
+      "metadata": {
+        "description": "Minimum TLS version the namespace accepts."
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Tags applied to every resource created by this template."
+      }
+    },
+    "eventHubName": {
+      "type": "string",
+      "defaultValue": "abstract-destination-hub",
+      "minLength": 1,
+      "maxLength": 256,
+      "metadata": {
+        "description": "Name of the Event Hub that Abstract delivers events to. Enter this in the \"EventHub Name\" field of the Abstract destination integration."
+      }
+    },
+    "partitionCount": {
+      "type": "int",
+      "defaultValue": 4,
+      "minValue": 1,
+      "maxValue": 32,
+      "metadata": {
+        "description": "Partition count for the destination hub. Abstract docs recommend at least 4. Cannot be reduced after creation; max 32 on Standard."
+      }
+    },
+    "retentionDays": {
+      "type": "int",
+      "defaultValue": 7,
+      "minValue": 1,
+      "maxValue": 7,
+      "metadata": {
+        "description": "Message retention in days. Size this to ride out delivery delays. Standard allows 1-7."
+      }
+    },
+    "enableSas": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Create the Send-only SAS rule used for \"EventHub Connection String\" auth in the Abstract destination modal. When false, local (SAS) auth is fully DISABLED and only Entra ID / RBAC works."
+      }
+    },
+    "sendRuleName": {
+      "type": "string",
+      "defaultValue": "abstract-send",
+      "metadata": {
+        "description": "Name of the least-privilege Send SAS rule created at namespace level. Use its primary connection string in the Abstract destination modal instead of RootManageSharedAccessKey."
+      }
+    },
+    "enableRbac": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Also assign Azure RBAC (Azure Event Hubs Data Sender) so Abstract can deliver events using a service principal / managed identity instead of a connection string."
+      }
+    },
+    "principalId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Object ID of the service principal Abstract authenticates as (the Enterprise Application object ID, NOT the app/client ID). Required only when enableRbac = true."
+      }
+    },
+    "roleDefinitionName": {
+      "type": "string",
+      "defaultValue": "Azure Event Hubs Data Sender",
+      "allowedValues": [
+        "Azure Event Hubs Data Sender",
+        "Azure Event Hubs Data Owner"
+      ],
+      "metadata": {
+        "description": "Built-in Event Hubs data-plane role granted to the principal. A destination only needs to SEND, so Data Sender is the least-privilege choice."
+      }
+    },
+    "principalType": {
+      "type": "string",
+      "defaultValue": "ServicePrincipal",
+      "allowedValues": [
+        "ServicePrincipal",
+        "User",
+        "Group"
+      ],
+      "metadata": {
+        "description": "Type of the principal being granted RBAC (avoids PrincipalNotFound on freshly created SPNs)."
+      }
+    },
+    "allowedIpRanges": {
+      "type": "array",
+      "defaultValue": [],
+      "metadata": {
+        "description": "Public IP ranges (CIDR) allowed through the namespace firewall - Abstract egress IPs plus your admin ranges. A non-empty list flips the firewall default action to Deny (unless Safe Mode is on). Empty entries are filtered out."
+      }
+    },
+    "allowAzureServices": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Allow trusted Microsoft services through the firewall."
+      }
+    },
+    "disablePublicNetwork": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Disable ALL public network access on the namespace (Private Endpoint only). Only honored when safeMode = false. NOTE: blocks Abstract (external SaaS) unless it reaches the namespace privately."
+      }
+    },
+    "enablePrivateEndpoint": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Create a Private Endpoint for the namespace."
+      }
+    },
+    "subnetId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource ID of the subnet that will host the Private Endpoint NIC."
+      }
+    },
+    "privateDnsZoneId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource ID of the privatelink.servicebus.windows.net Private DNS zone (recommended with the Private Endpoint)."
+      }
+    },
+    "safeMode": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Safe Mode guardrails for external SaaS delivery (Abstract):\n  true  -> public network access stays ON, the IP allowlist is ignored, and the\n           firewall default action stays Allow so Abstract can always deliver.\n  false -> disablePublicNetwork / allowedIpRanges are honored exactly as set.\nShip customers safeMode=true for onboarding; harden later.\n"
+      }
+    },
+    "enableDiagnostics": {
+      "type": "bool",
+      "defaultValue": false,
+      "metadata": {
+        "description": "Enable diagnostic settings on the destination namespace so you can monitor the health of the delivery pipeline itself."
+      }
+    },
+    "logAnalyticsWorkspaceId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Resource ID of the Log Analytics workspace for namespace diagnostics."
+      }
+    },
+    "diagnosticsStorageAccountId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Optional storage account resource ID for diagnostics archive."
+      }
+    }
+  },
+  "variables": {
+    "isStandard": "[equals(parameters('sku'), 'Standard')]",
+    "cleanedIpRanges": "[filter(parameters('allowedIpRanges'), lambda('ip', not(empty(trim(string(lambdaVariables('ip')))))))]",
+    "effectivePublicAccess": "[if(parameters('safeMode'), 'Enabled', if(parameters('disablePublicNetwork'), 'Disabled', 'Enabled'))]",
+    "effectiveIpRules": "[if(parameters('safeMode'), createArray(), variables('cleanedIpRanges'))]",
+    "lockedDown": "[and(not(parameters('safeMode')), or(greater(length(variables('effectiveIpRules')), 0), parameters('disablePublicNetwork')))]",
+    "networkDefaultAction": "[if(variables('lockedDown'), 'Deny', 'Allow')]",
+    "roleMap": {
+      "Azure Event Hubs Data Sender": "2b629674-e913-4c01-ae53-ef4638d8f975",
+      "Azure Event Hubs Data Owner": "f526a384-b230-433a-b45c-95f59c4a2dec"
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.EventHub/namespaces",
+      "apiVersion": "2024-01-01",
+      "name": "[parameters('namespaceName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "sku": {
+        "name": "[parameters('sku')]",
+        "tier": "[parameters('sku')]",
+        "capacity": "[parameters('capacity')]"
+      },
+      "properties": {
+        "minimumTlsVersion": "[parameters('minimumTlsVersion')]",
+        "publicNetworkAccess": "[variables('effectivePublicAccess')]",
+        "disableLocalAuth": "[not(parameters('enableSas'))]",
+        "isAutoInflateEnabled": "[and(variables('isStandard'), parameters('autoInflate'))]",
+        "maximumThroughputUnits": "[if(and(variables('isStandard'), parameters('autoInflate')), parameters('maxThroughputUnits'), 0)]"
+      }
+    },
+    {
+      "type": "Microsoft.EventHub/namespaces/networkRuleSets",
+      "apiVersion": "2024-01-01",
+      "name": "[format('{0}/{1}', parameters('namespaceName'), 'default')]",
+      "properties": {
+        "copy": [
+          {
+            "name": "ipRules",
+            "count": "[length(variables('effectiveIpRules'))]",
+            "input": {
+              "ipMask": "[variables('effectiveIpRules')[copyIndex('ipRules')]]",
+              "action": "Allow"
+            }
+          }
+        ],
+        "publicNetworkAccess": "[variables('effectivePublicAccess')]",
+        "defaultAction": "[variables('networkDefaultAction')]",
+        "trustedServiceAccessEnabled": "[parameters('allowAzureServices')]",
+        "virtualNetworkRules": []
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.EventHub/namespaces/eventhubs",
+      "apiVersion": "2024-01-01",
+      "name": "[format('{0}/{1}', parameters('namespaceName'), parameters('eventHubName'))]",
+      "properties": {
+        "partitionCount": "[parameters('partitionCount')]",
+        "messageRetentionInDays": "[parameters('retentionDays')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName'))]"
+      ]
+    },
+    {
+      "condition": "[parameters('enableSas')]",
+      "type": "Microsoft.EventHub/namespaces/authorizationRules",
+      "apiVersion": "2024-01-01",
+      "name": "[format('{0}/{1}', parameters('namespaceName'), parameters('sendRuleName'))]",
+      "properties": {
+        "rights": [
+          "Send"
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName'))]"
+      ]
+    },
+    {
+      "condition": "[and(parameters('enableRbac'), not(empty(parameters('principalId'))))]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName'))]",
+      "name": "[guid(resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName')), parameters('principalId'), variables('roleMap')[parameters('roleDefinitionName')])]",
+      "properties": {
+        "principalId": "[parameters('principalId')]",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('roleMap')[parameters('roleDefinitionName')])]",
+        "principalType": "[parameters('principalType')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName'))]"
+      ]
+    },
+    {
+      "condition": "[and(parameters('enablePrivateEndpoint'), not(empty(parameters('subnetId'))))]",
+      "type": "Microsoft.Network/privateEndpoints",
+      "apiVersion": "2023-11-01",
+      "name": "[format('{0}-pe', parameters('namespaceName'))]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "subnet": {
+          "id": "[parameters('subnetId')]"
+        },
+        "privateLinkServiceConnections": [
+          {
+            "name": "eventhub-connection",
+            "properties": {
+              "privateLinkServiceId": "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName'))]",
+              "groupIds": [
+                "namespace"
+              ]
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName'))]"
+      ]
+    },
+    {
+      "condition": "[and(and(parameters('enablePrivateEndpoint'), not(empty(parameters('subnetId')))), not(empty(parameters('privateDnsZoneId'))))]",
+      "type": "Microsoft.Network/privateEndpoints/privateDnsZoneGroups",
+      "apiVersion": "2023-11-01",
+      "name": "[format('{0}/{1}', format('{0}-pe', parameters('namespaceName')), 'default')]",
+      "properties": {
+        "privateDnsZoneConfigs": [
+          {
+            "name": "eventhub-dns",
+            "properties": {
+              "privateDnsZoneId": "[parameters('privateDnsZoneId')]"
+            }
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Network/privateEndpoints', format('{0}-pe', parameters('namespaceName')))]"
+      ]
+    },
+    {
+      "condition": "[and(parameters('enableDiagnostics'), or(not(empty(parameters('logAnalyticsWorkspaceId'))), not(empty(parameters('diagnosticsStorageAccountId')))))]",
+      "type": "Microsoft.Insights/diagnosticSettings",
+      "apiVersion": "2021-05-01-preview",
+      "scope": "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName'))]",
+      "name": "[format('{0}-diagnostics', parameters('namespaceName'))]",
+      "properties": {
+        "workspaceId": "[if(empty(parameters('logAnalyticsWorkspaceId')), null(), parameters('logAnalyticsWorkspaceId'))]",
+        "storageAccountId": "[if(empty(parameters('diagnosticsStorageAccountId')), null(), parameters('diagnosticsStorageAccountId'))]",
+        "logs": [
+          {
+            "categoryGroup": "allLogs",
+            "enabled": true
+          }
+        ],
+        "metrics": [
+          {
+            "category": "AllMetrics",
+            "enabled": true
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.EventHub/namespaces', parameters('namespaceName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "namespaceName": {
+      "type": "string",
+      "value": "[parameters('namespaceName')]"
+    },
+    "namespaceFqdn": {
+      "type": "string",
+      "value": "[format('{0}.servicebus.windows.net', parameters('namespaceName'))]"
+    },
+    "eventHubName": {
+      "type": "string",
+      "value": "[parameters('eventHubName')]"
+    },
+    "sendRuleName": {
+      "type": "string",
+      "value": "[if(parameters('enableSas'), parameters('sendRuleName'), '(local auth disabled - use RBAC delivery)')]"
+    },
+    "publicAccess": {
+      "type": "string",
+      "value": "[variables('effectivePublicAccess')]"
+    },
+    "firewallDefaultAction": {
+      "type": "string",
+      "value": "[variables('networkDefaultAction')]"
+    },
+    "safeModeEnabled": {
+      "type": "bool",
+      "value": "[parameters('safeMode')]"
+    },
+    "rbacEnabled": {
+      "type": "bool",
+      "value": "[and(parameters('enableRbac'), not(empty(parameters('principalId'))))]"
+    },
+    "abstractDestinationOnboarding": {
+      "type": "object",
+      "value": {
+        "eventHubName": "[parameters('eventHubName')]",
+        "eventHubConnectionString": "[if(parameters('enableSas'), format('Portal: Event Hubs Namespace > Shared access policies > {0} > Connection string-primary key (this is a Send-only key)', parameters('sendRuleName')), '(SAS disabled - deliver via Entra ID / RBAC)')]",
+        "namespaceFqdn": "[format('{0}.servicebus.windows.net', parameters('namespaceName'))]",
+        "rbacDelivery": "[if(and(parameters('enableRbac'), not(empty(parameters('principalId')))), format('{0} granted on the namespace to principal {1}', parameters('roleDefinitionName'), parameters('principalId')), '(not configured)')]",
+        "docs": "https://docs.abstractsecurity.app/docs/integrations/destination-integrations/azure-eventhub-destination/"
+      }
+    }
+  }
+}

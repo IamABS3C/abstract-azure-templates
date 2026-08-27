@@ -1,0 +1,23 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "3.0.0.0",
+  "metadata": {
+    "description": "Abstract 'Azure EventHub Destination' baseline: Standard tier, one destination hub (4 partitions), least-privilege Send SAS rule for the connection string, Safe Mode networking so Abstract can always deliver. Use with templates/destinations/eventhub-destination.azuredeploy.json."
+  },
+  "parameters": {
+    "namespaceName": { "value": "abs-dest001" },
+    "sku": { "value": "Standard" },
+    "capacity": { "value": 1 },
+    "autoInflate": { "value": true },
+    "maxThroughputUnits": { "value": 10 },
+    "eventHubName": { "value": "abstract-destination-hub" },
+    "partitionCount": { "value": 4 },
+    "retentionDays": { "value": 7 },
+    "enableSas": { "value": true },
+    "sendRuleName": { "value": "abstract-send" },
+    "enableRbac": { "value": false },
+    "principalId": { "value": "" },
+    "safeMode": { "value": true },
+    "allowAzureServices": { "value": true }
+  }
+}

@@ -1,0 +1,99 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-08-01/tenantDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.44.1.10279",
+      "templateHash": "13227921947349182745"
+    }
+  },
+  "parameters": {
+    "settingName": {
+      "type": "string",
+      "defaultValue": "abstract-entra-logstream",
+      "minLength": 1,
+      "maxLength": 260,
+      "metadata": {
+        "description": "Name of the Entra ID diagnostic setting. Multiple settings are allowed, so this can sit alongside a setting you already send to another SIEM."
+      }
+    },
+    "eventHubAuthorizationRuleId": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource ID of an Event Hubs namespace authorization rule with Send rights. Use the abstractDiagnosticsAuthRuleId output of main.bicep."
+      }
+    },
+    "eventHubName": {
+      "type": "string",
+      "defaultValue": "abs-prod-entra",
+      "metadata": {
+        "description": "Event Hub that receives the Entra ID stream. Give identity its own hub so it can be partitioned and scaled independently of resource logs."
+      }
+    },
+    "entraLogCategories": {
+      "type": "array",
+      "defaultValue": [
+        "AuditLogs",
+        "SignInLogs",
+        "NonInteractiveUserSignInLogs",
+        "ServicePrincipalSignInLogs",
+        "ManagedIdentitySignInLogs",
+        "ProvisioningLogs",
+        "ADFSSignInLogs",
+        "RiskyUsers",
+        "UserRiskEvents",
+        "RiskyServicePrincipals",
+        "ServicePrincipalRiskEvents",
+        "MicrosoftGraphActivityLogs"
+      ],
+      "metadata": {
+        "description": "Entra ID log categories to stream. Defaults to the security-relevant set that\nevery Abstract Entra detection is built on.\n\nLicensing / availability notes (revised 2026-08-26 against Microsoft's own\nlicensing table - the previous note overstated the P1 requirement):\n  AuditLogs, SignInLogs        - available on Entra ID FREE. Microsoft's\n                                 monitoring-and-health licensing table lists\n                                 both as \"Yes\" for Free and for P1/P2.\n  NonInteractiveUserSignInLogs,\n  ServicePrincipalSignInLogs,\n  ManagedIdentitySignInLogs    - NO documented P1/P2 requirement exists for\n                                 these as diagnostic-setting EXPORT categories.\n                                 All 80 files in Microsoft's\n                                 identity/monitoring-health docs were checked.\n                                 The real P1/P2 gate people are thinking of is\n                                 on DOWNLOADING sign-in logs via the Microsoft\n                                 Graph API, which is a different operation.\n                                 Treat a P1 claim here as unverified.\n  ProvisioningLogs             - P1/P2 (Free = \"No\" in the licensing table),\n                                 and only populated when you provision via Entra\n  MicrosoftGraphActivityLogs   - P1/P2, explicitly stated\n  RiskyUsers, UserRiskEvents,\n  RiskyServicePrincipals, ServicePrincipalRiskEvents,\n  RiskyAgents, AgentRiskEvents - Entra ID Protection (P2)\n  ADFSSignInLogs               - only when AD FS is in use\n  NetworkAccessTrafficLogs,\n  EnrichedOffice365AuditLogs,\n  RemoteNetworkHealthLogs      - only with Global Secure Access / Entra\n                                 Internet Access + Private Access\n  MicrosoftGraphActivityLogs   - high volume; the single best source for\n                                 \"what did this token actually do\". At 100k\n                                 users Microsoft publishes ~1,000 GiB/month and\n                                 ~4.8M Event Hubs messages/month. Size for it.\n  MicrosoftServicePrincipalSignInLogs - preview, VERY high volume, first-party\n                                 service-to-service. Microsoft advises against\n                                 acting on it. Off by default here.\n  CustomSecurityAttributeAuditLogs - needs Attribute Log Administrator, and\n                                 Microsoft recommends keeping it separate from\n                                 the directory audit stream.\n  B2CRequestLogs               - Azure AD B2C tenants only.\n\nSelecting a category your tenant does not license or use is harmless - it simply\nproduces no records. Note the corollary, which is a silent-failure shape: a\ncategory can be selectable and emit nothing forever because the underlying\nPRODUCT is not in use (NetworkAccessTrafficLogs without Global Secure Access is\nthe common case), and that is indistinguishable from a broken pipeline unless\nyou know to expect it.\n\nVolume: Microsoft states non-interactive and service-principal sign-ins \"can be\n5 to 10 times larger than the interactive user sign-ins\". Per-event sizes are\n~2 KB for audit and ~11.5 KB for sign-ins; a 100,000-user tenant runs about\n1.5 million events per day.\n"
+      }
+    }
+  },
+  "resources": [
+    {
+      "type": "microsoft.aadiam/diagnosticSettings",
+      "apiVersion": "2017-04-01",
+      "name": "[parameters('settingName')]",
+      "properties": {
+        "copy": [
+          {
+            "name": "logs",
+            "count": "[length(parameters('entraLogCategories'))]",
+            "input": {
+              "category": "[parameters('entraLogCategories')[copyIndex('logs')]]",
+              "enabled": true
+            }
+          }
+        ],
+        "eventHubAuthorizationRuleId": "[parameters('eventHubAuthorizationRuleId')]",
+        "eventHubName": "[parameters('eventHubName')]"
+      }
+    }
+  ],
+  "outputs": {
+    "diagnosticSettingName": {
+      "type": "string",
+      "value": "[parameters('settingName')]"
+    },
+    "eventHubName": {
+      "type": "string",
+      "value": "[parameters('eventHubName')]"
+    },
+    "streamedCategories": {
+      "type": "array",
+      "value": "[parameters('entraLogCategories')]"
+    },
+    "abstractOnboarding": {
+      "type": "object",
+      "value": {
+        "scope": "Microsoft Entra ID tenant - one setting covers the whole organisation",
+        "policyManaged": "No. Entra diagnostic settings are tenant-level; Azure Policy has no per-subscription object to evaluate. This template IS the automation.",
+        "firstDataLatency": "Up to 3 days for the first records, per Microsoft documentation.",
+        "notIncluded": "Microsoft 365 unified audit (Exchange/SharePoint/Teams) and Defender XDR advanced hunting are separate streams - see docs/azure-log-streams.md"
+      }
+    }
+  }
+}

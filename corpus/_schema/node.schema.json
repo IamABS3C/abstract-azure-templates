@@ -1,0 +1,839 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://abstract.security/schemas/cloud-onboarding/node.schema.json",
+  "title": "Cloud onboarding corpus node",
+  "description": "One deployable path for getting a cloud log source into Abstract. A node is the unit that generates a Notion page, a builder-app screen, FAQ entries and troubleshooting rows. Everything downstream is generated from these \u2014 never hand-edit the generated surfaces.",
+  "type": "object",
+  "required": [
+    "id",
+    "title",
+    "cloud",
+    "service",
+    "direction",
+    "transport",
+    "status",
+    "provenance",
+    "summary",
+    "prereqs",
+    "artifacts",
+    "verification",
+    "references"
+  ],
+  "additionalProperties": false,
+  "properties": {
+    "id": {
+      "type": "string",
+      "pattern": "^(azure|aws|gcp|oci|multi)\\.[a-z0-9-]+(\\.[a-z0-9-]+)*$",
+      "description": "Stable primary key, e.g. azure.event-hub.activity-log. NEVER change it once synced \u2014 the Notion registry maps it to a page ID."
+    },
+    "title": {
+      "type": "string",
+      "minLength": 4,
+      "maxLength": 120
+    },
+    "cloud": {
+      "enum": [
+        "azure",
+        "aws",
+        "gcp",
+        "oci",
+        "multi"
+      ]
+    },
+    "service": {
+      "type": "string",
+      "description": "The cloud service or log source in the vendor's own words, e.g. 'Azure Monitor Activity Log', 'AWS CloudTrail', 'Cloud Audit Logs'."
+    },
+    "direction": {
+      "enum": [
+        "source",
+        "destination"
+      ],
+      "description": "source = cloud -> Abstract. destination = Abstract -> cloud."
+    },
+    "transport": {
+      "enum": [
+        "event-hub",
+        "event-grid",
+        "azure-storage",
+        "azure-monitor-dcr",
+        "s3-sqs",
+        "s3-sns-sqs",
+        "s3-eventbridge",
+        "kinesis",
+        "firehose",
+        "cloudwatch-logs",
+        "lambda",
+        "security-lake",
+        "pubsub",
+        "gcs-pubsub-notifications",
+        "gcp-log-router",
+        "oci-service-connector",
+        "oci-streaming",
+        "http-collector",
+        "webhook",
+        "syslog",
+        "otlp",
+        "api-pull"
+      ],
+      "description": "How bytes physically move. Distinct from the authoring tool \u2014 see artifacts[].kind."
+    },
+    "abstract_integration": {
+      "type": "object",
+      "description": "The Abstract-side integration this node feeds. Verified against GET /v1/integrations/.",
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "e.g. default.google_cloud_pub_sub.0_0_11"
+        },
+        "name": {
+          "type": "string"
+        },
+        "mode": {
+          "enum": [
+            "PULL",
+            "LISTEN",
+            "PUSH",
+            "n/a"
+          ]
+        },
+        "config_fields": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "key",
+              "mandatory"
+            ],
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "label": {
+                "type": "string"
+              },
+              "mandatory": {
+                "type": "boolean"
+              },
+              "note": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "verified_on": {
+          "type": "string",
+          "format": "date"
+        }
+      }
+    },
+    "scopes": {
+      "type": "array",
+      "description": "Deployment scopes this path can bind to. The org-level scope is what makes a path cover future accounts.",
+      "items": {
+        "enum": [
+          "resource-group",
+          "subscription",
+          "management-group",
+          "tenant",
+          "account",
+          "organization",
+          "organizational-unit",
+          "region",
+          "project",
+          "folder",
+          "gcp-organization",
+          "compartment",
+          "oci-tenancy"
+        ]
+      }
+    },
+    "covers_future_accounts": {
+      "type": "boolean",
+      "description": "TRUE only if new accounts/subscriptions/projects created later are onboarded with NO further action. This is the single most-asked customer question \u2014 do not set it true without naming the mechanism in mechanism_note."
+    },
+    "mechanism_note": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "ga",
+        "preview",
+        "workaround",
+        "gap"
+      ],
+      "description": "gap = Abstract has no integration for this; the node documents the path forward and MUST carry a feature_request."
+    },
+    "feature_request": {
+      "type": "object",
+      "properties": {
+        "linear": {
+          "type": "string"
+        },
+        "ask": {
+          "type": "string"
+        },
+        "why": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "provenance": {
+      "$ref": "#/$defs/provenanceTier",
+      "description": "Tier of the RECOMMENDED artifact \u2014 the path we actually tell customers to use. CI enforces the match. Every artifact also renders its own tier, so a weaker convenience snippet alongside a validated template neither inflates nor deflates this."
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 40
+    },
+    "when_to_use": {
+      "type": "string"
+    },
+    "when_not_to_use": {
+      "type": "string"
+    },
+    "alternatives_rejected": {
+      "type": "array",
+      "description": "Named and reasoned, so the option is not re-proposed six months later.",
+      "items": {
+        "type": "object",
+        "required": [
+          "option",
+          "why_not"
+        ],
+        "properties": {
+          "option": {
+            "type": "string"
+          },
+          "why_not": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "decision": {
+      "type": "array",
+      "description": "The choose-your-own-adventure questions. THIS IS THE IP \u2014 templates are commodity, the discriminating questions are not. Every question must be answerable by the customer before they touch a console.",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "question",
+          "why_it_matters",
+          "options"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "question": {
+            "type": "string"
+          },
+          "why_it_matters": {
+            "type": "string"
+          },
+          "ask_who": {
+            "type": "string",
+            "description": "Which human holds this answer \u2014 cloud admin, security, network, finance. Onboardings stall when nobody identified this person."
+          },
+          "options": {
+            "type": "array",
+            "minItems": 2,
+            "items": {
+              "type": "object",
+              "required": [
+                "value",
+                "leads_to"
+              ],
+              "properties": {
+                "value": {
+                  "type": "string"
+                },
+                "leads_to": {
+                  "type": "string",
+                  "description": "A node id, an artifact kind, or 'stop:<reason>'."
+                },
+                "note": {
+                  "type": "string"
+                }
+              },
+              "additionalProperties": false
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "prereqs": {
+      "type": "object",
+      "required": [
+        "identity"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "identity": {
+          "type": "array",
+          "description": "Roles/permissions needed, and AT WHAT SCOPE. The scope mismatch (person has project rights but the action needs org rights) is the #1 onboarding blocker across all clouds.",
+          "items": {
+            "type": "object",
+            "required": [
+              "principal",
+              "role",
+              "scope",
+              "why"
+            ],
+            "properties": {
+              "principal": {
+                "enum": [
+                  "deployer",
+                  "abstract",
+                  "service-identity",
+                  "policy-identity"
+                ]
+              },
+              "role": {
+                "type": "string"
+              },
+              "scope": {
+                "type": "string"
+              },
+              "why": {
+                "type": "string"
+              },
+              "least_privilege_alternative": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "resources": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "settings": {
+          "type": "array",
+          "description": "Things that must be switched on first and are off by default (e.g. GCP Data Access audit logs, M365 unified audit log).",
+          "items": {
+            "type": "string"
+          }
+        },
+        "network": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "quotas_limits": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "lead_time": {
+          "type": "string",
+          "description": "Anything with a propagation delay, e.g. '24-48h for M365 audit log'."
+        }
+      }
+    },
+    "console_walkthrough": {
+      "type": "array",
+      "description": "Click-path for operators who will not touch a CLI. Every node needs one \u2014 the GUI is how most customers actually do it the first time.",
+      "items": {
+        "type": "object",
+        "required": [
+          "step",
+          "action"
+        ],
+        "properties": {
+          "step": {
+            "type": "integer"
+          },
+          "action": {
+            "type": "string"
+          },
+          "where": {
+            "type": "string",
+            "description": "Portal/console breadcrumb."
+          },
+          "expected": {
+            "type": "string"
+          },
+          "gotcha": {
+            "type": "string"
+          },
+          "image": {
+            "type": "object",
+            "description": "Visual for this step. The licence terms below are not decoration: they are what makes the image usable. Microsoft permits screenshots of its software in documentation only if they are UNALTERED except for resizing, are not cropped to a portion, contain no third-party content and no identifiable individual, and carry the credit 'Used with permission from Microsoft'. Google excludes images from the CC-BY licence covering its documentation text entirely. So: prefer 'own-capture' (our terminal, our createUiDefinition form) and 'drawio' over any vendor screenshot.",
+            "required": [
+              "path",
+              "alt",
+              "source",
+              "license",
+              "altered"
+            ],
+            "properties": {
+              "path": {
+                "type": "string",
+                "description": "Repo-relative path under assets/."
+              },
+              "alt": {
+                "type": "string",
+                "minLength": 12,
+                "description": "Real alt text. The step is unreadable without it for screen readers and when the image fails to load."
+              },
+              "caption": {
+                "type": "string"
+              },
+              "source": {
+                "enum": [
+                  "own-capture",
+                  "own-terminal",
+                  "own-ui-definition",
+                  "drawio",
+                  "vendor-console",
+                  "vendor-doc"
+                ],
+                "description": "vendor-doc images are almost never licensed for reuse. vendor-console means we captured the vendor's product ourselves."
+              },
+              "license": {
+                "enum": [
+                  "abstract-owned",
+                  "ms-screenshot-permission",
+                  "cc-by-4.0",
+                  "vendor-icon-set",
+                  "unlicensed"
+                ]
+              },
+              "credit": {
+                "type": "string",
+                "description": "Verbatim attribution string required by the licence."
+              },
+              "captured": {
+                "type": "string",
+                "format": "date"
+              },
+              "tenant_safe": {
+                "type": "boolean",
+                "description": "True only if the frame shows no tenant, subscription, project, directory or account name, and no person."
+              },
+              "altered": {
+                "type": "boolean",
+                "description": "Must be false for any vendor-sourced image. Resizing is not alteration; cropping, blurring and de-branding are."
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "artifacts": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/artifact"
+      }
+    },
+    "delivery_surfaces": {
+      "type": "array",
+      "description": "How the artifact is DELIVERED, which is a different axis from how it is AUTHORED. Octopus/Harness/GitHub Actions orchestrate Terraform or CFN; they are not IaC languages.",
+      "items": {
+        "enum": [
+          "console",
+          "cli",
+          "ci-github-actions",
+          "ci-azure-devops",
+          "ci-gitlab",
+          "octopus",
+          "harness",
+          "jenkins",
+          "terraform-cloud",
+          "service-catalog",
+          "stackset",
+          "azure-policy",
+          "landing-zone"
+        ]
+      }
+    },
+    "verification": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Ordered checks proving it works, each isolating ONE layer so a failure localises. Cloud-side first, Abstract-side last.",
+      "items": {
+        "type": "object",
+        "required": [
+          "check",
+          "where",
+          "healthy"
+        ],
+        "properties": {
+          "check": {
+            "type": "string"
+          },
+          "where": {
+            "enum": [
+              "cloud-console",
+              "cloud-cli",
+              "abstract-ui",
+              "abstract-api",
+              "local"
+            ]
+          },
+          "command": {
+            "type": "string"
+          },
+          "healthy": {
+            "type": "string"
+          },
+          "unhealthy_means": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "troubleshooting": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "symptom",
+          "likely_cause",
+          "check",
+          "fix"
+        ],
+        "properties": {
+          "symptom": {
+            "type": "string"
+          },
+          "likely_cause": {
+            "type": "string"
+          },
+          "check": {
+            "type": "string"
+          },
+          "fix": {
+            "type": "string"
+          },
+          "silent": {
+            "type": "boolean",
+            "description": "TRUE only when the failure produces ZERO EVENTS AND NO ERROR SIGNAL ANYWHERE -- nothing red, nothing logged, nothing reported non-compliant. These cost days because everyone assumes the pipeline is fine, so they render first.\n\nNOT silent, however expensive: a WRONG or PARTIAL result that is discoverable by looking at one event; a state the platform itself reports (non-compliant, 'Insufficient data', a metric sitting at zero); a cost surprise visible on the bill; or expected latency that is not a failure at all.\n\nThe flag only earns its position if it stays a minority. It was over-applied to 29 of 52 entries on 2026-08-26, at which point sorting by it stopped discriminating; the gate now warns above 50%."
+          },
+          "seen_on": {
+            "type": "string",
+            "description": "Engagement or date where this was actually observed. Empty = theoretical."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "cost": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "drivers": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "driver",
+              "charged_on",
+              "side"
+            ],
+            "properties": {
+              "driver": {
+                "type": "string"
+              },
+              "charged_on": {
+                "type": "string"
+              },
+              "side": {
+                "enum": [
+                  "customer-cloud",
+                  "abstract",
+                  "downstream-siem"
+                ]
+              },
+              "note": {
+                "type": "string"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "surprise_line": {
+          "type": "string",
+          "description": "The cost nobody budgets for (NAT gateway per-GB, Data Access log amplification, retained cold storage)."
+        },
+        "volume_shape": {
+          "type": "string"
+        },
+        "savings": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "detections_unlocked": {
+      "type": "array",
+      "description": "Why a SOC should care. Keeps the corpus from becoming a pile of plumbing docs.",
+      "items": {
+        "type": "object",
+        "required": [
+          "detection"
+        ],
+        "properties": {
+          "detection": {
+            "type": "string"
+          },
+          "acs_fields": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "mitre": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "reviews": {
+      "type": "object",
+      "description": "Multi-perspective review. Each lens is written by (or synthesised from) a reviewer pass; empty string means not yet reviewed.",
+      "additionalProperties": false,
+      "properties": {
+        "cloud_architect": {
+          "type": "string"
+        },
+        "devops": {
+          "type": "string"
+        },
+        "security_iam": {
+          "type": "string"
+        },
+        "finops": {
+          "type": "string"
+        },
+        "soc": {
+          "type": "string"
+        }
+      }
+    },
+    "faq": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "q",
+          "a"
+        ],
+        "properties": {
+          "q": {
+            "type": "string"
+          },
+          "a": {
+            "type": "string"
+          },
+          "asked_by": {
+            "type": "string",
+            "description": "Real customer/engagement if this came from a live question."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "references": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "required": [
+          "title",
+          "url",
+          "tier"
+        ],
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          },
+          "tier": {
+            "enum": [
+              "vendor-doc",
+              "vendor-blog",
+              "vendor-release-note",
+              "reference-architecture",
+              "github",
+              "community",
+              "internal-notion",
+              "internal-linear",
+              "internal-repo"
+            ],
+            "description": "vendor-doc outranks everything. community (Medium/blog/forum) is usable but must never be the ONLY support for a factual claim."
+          },
+          "retrieved": {
+            "type": "string",
+            "format": "date"
+          },
+          "supports": {
+            "type": "string",
+            "description": "Which specific claim in this node this reference backs."
+          }
+        },
+        "additionalProperties": false
+      }
+    },
+    "related_nodes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    },
+    "supersedes_notion": {
+      "type": "array",
+      "description": "Notion page IDs this node replaces. Drives the consolidation report and the archive pass.",
+      "items": {
+        "type": "string"
+      }
+    },
+    "merges_notion": {
+      "type": "array",
+      "description": "Notion page IDs whose content was folded in (credit preserved, page kept).",
+      "items": {
+        "type": "string"
+      }
+    },
+    "owner": {
+      "type": "string"
+    },
+    "last_reviewed": {
+      "type": "string",
+      "format": "date"
+    }
+  },
+  "$defs": {
+    "provenanceTier": {
+      "enum": [
+        "deployed",
+        "planned",
+        "validated",
+        "schema-reviewed",
+        "cited"
+      ],
+      "description": "deployed = executed against a real account. planned = terraform plan / az what-if / CFN changeset against real credentials. validated = compiler or linter passed locally (bicep build, cfn-lint, terraform validate). schema-reviewed = written to the current provider schema but never executed. cited = reproduced from a named vendor doc. NOTHING ships without one, and the tier is rendered on every generated surface."
+    },
+    "artifact": {
+      "type": "object",
+      "required": [
+        "kind",
+        "provenance"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "kind": {
+          "enum": [
+            "bicep",
+            "arm-json",
+            "arm-ui",
+            "azure-policy",
+            "azure-cli",
+            "powershell",
+            "az-deployment-script",
+            "cloudformation",
+            "cfn-stackset",
+            "cfn-changeset",
+            "aws-cli",
+            "cdk",
+            "sam",
+            "terraform",
+            "opentofu",
+            "pulumi",
+            "ansible",
+            "gcloud-cli",
+            "deployment-manager",
+            "oci-cli",
+            "oci-resource-manager",
+            "python",
+            "bash",
+            "github-actions"
+          ],
+          "description": "How the artifact is AUTHORED. StackSets and changesets are CloudFormation FEATURES, kept here only because they are separately deployable units."
+        },
+        "path": {
+          "type": "string",
+          "description": "Repo-relative path if the artifact is a file in this repo."
+        },
+        "external_path": {
+          "type": "string",
+          "description": "Absolute path if it lives in another repo \u2014 the canonical copy, per the consolidation audit."
+        },
+        "inline": {
+          "type": "string",
+          "description": "The artifact itself, for short snippets embedded directly in the generated page."
+        },
+        "provenance": {
+          "$ref": "#/$defs/provenanceTier"
+        },
+        "validation": {
+          "type": "object",
+          "description": "Evidence. If provenance is validated/planned/deployed this MUST be present and MUST record a command that was actually run.",
+          "required": [
+            "command",
+            "result",
+            "run_on"
+          ],
+          "properties": {
+            "command": {
+              "type": "string"
+            },
+            "result": {
+              "type": "string"
+            },
+            "run_on": {
+              "type": "string",
+              "format": "date"
+            },
+            "tool_version": {
+              "type": "string"
+            }
+          },
+          "additionalProperties": false
+        },
+        "scope": {
+          "type": "string"
+        },
+        "idempotent": {
+          "type": "boolean"
+        },
+        "destructive_risk": {
+          "type": "string",
+          "description": "What this overwrites or replaces. Read-merge-write beats blind write; say which this does."
+        },
+        "note": {
+          "type": "string"
+        },
+        "recommended": {
+          "type": "boolean",
+          "description": "Exactly ONE artifact per node must set this. It is the path we tell customers to use, and node.provenance must equal ITS tier \u2014 so the headline claim tracks the recommended path rather than being dragged down by a convenience snippet or inflated by the best-evidenced one."
+        }
+      }
+    }
+  }
+}

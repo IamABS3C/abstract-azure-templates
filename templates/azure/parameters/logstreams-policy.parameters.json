@@ -1,0 +1,117 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "namePrefix": {
+      "value": "abs"
+    },
+    "assignmentLocation": {
+      "value": "eastus"
+    },
+
+    // ROLLOUT — start in report-only. AuditIfNotExists + DoNotEnforce shows what
+    // WOULD be onboarded and changes nothing. Flip both once the compliance
+    // report looks right: "DeployIfNotExists" + "Default".
+    "effect": {
+      "value": "AuditIfNotExists"
+    },
+    "enforcementMode": {
+      "value": "DoNotEnforce"
+    },
+
+    // HUB NAMES — Azure Policy NEVER creates hubs. Every name below must match a hub
+    // the source stack actually created: take them from main.bicep's `eventHubNames`
+    // output, not from these examples. main.bicep auto-names hubs
+    // <hubPrefix>-<environment>-<source>, so its own defaults (hubPrefix=abs,
+    // environment=prod) produce abs-prod-activity / abs-prod-entra / abs-prod-defender.
+    // The example parameter files in this folder override hubPrefix to "evh-abstract",
+    // which yields evh-abstract-prod-activity instead. Check before you deploy.
+    // Note also that the default hubSources list is activity/entra/defender — add
+    // "resource" if you want a dedicated hub for resource logs.
+
+    // ACTIVITY LOG — subscription-scope and NOT regional, so one hub serves every
+    // subscription in the management group regardless of where its resources are.
+    "enableActivityLog": {
+      "value": true
+    },
+    "activityLogAuthorizationRuleId": {
+      "value": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-abstract/providers/Microsoft.EventHub/namespaces/contoso-abstract/authorizationrules/abstract-diagnostics-send"
+    },
+    "activityLogEventHubName": {
+      "value": "abs-prod-activity"
+    },
+    "activityLogCategories": {
+      "value": [
+        "Administrative",
+        "Security",
+        "ServiceHealth",
+        "Alert",
+        "Recommendation",
+        "Policy",
+        "Autoscale",
+        "ResourceHealth"
+      ]
+    },
+
+    // RESOURCE LOGS — THE REGION RULE. Azure Monitor rejects a diagnostic setting
+    // whose Event Hub is in a different region from the monitored resource
+    // ("Resources should be in the same region"). One entry per region that holds
+    // regional resources, each pointing at a namespace IN THAT REGION. One policy
+    // assignment is created per entry.
+    "enableResourceLogs": {
+      "value": true
+    },
+    "categoryGroup": {
+      "value": "allLogs"
+    },
+    "regions": {
+      "value": [
+        {
+          "location": "eastus",
+          "authorizationRuleId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-abstract/providers/Microsoft.EventHub/namespaces/contoso-abstract-eastus/authorizationrules/abstract-diagnostics-send",
+          "eventHubName": "abs-prod-resource"
+        },
+        {
+          "location": "westeurope",
+          "authorizationRuleId": "/subscriptions/00000000-0000-0000-0000-000000000000/resourceGroups/rg-abstract/providers/Microsoft.EventHub/namespaces/contoso-abstract-westeurope/authorizationrules/abstract-diagnostics-send",
+          "eventHubName": "abs-prod-resource"
+        }
+      ]
+    },
+    "resourceTypeList": {
+      "value": []
+    },
+    "diagnosticSettingName": {
+      "value": "abstract-logstream"
+    },
+
+    // ADDITIONAL STREAMS — SQL auditing and Defender for Cloud are separate
+    // mechanisms, not diagnostic settings, so the resource-log initiative does not
+    // reach them. Note Defender wants a HUB-level authorization rule, not a
+    // namespace-level one.
+    "enableSqlAuditing": {
+      "value": false
+    },
+    "enableDefenderExport": {
+      "value": false
+    },
+    "defenderEventHubAuthorizationRuleId": {
+      "value": ""
+    },
+    "defenderExportResourceGroup": {
+      "value": "rg-abstract-defender-export"
+    },
+    "defenderExportedDataTypes": {
+      "value": [
+        "Alerts"
+      ]
+    },
+    "defenderAlertSeverities": {
+      "value": [
+        "High",
+        "Medium",
+        "Low"
+      ]
+    }
+  }
+}

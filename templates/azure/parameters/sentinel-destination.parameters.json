@@ -1,0 +1,18 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "3.0.0.0",
+  "metadata": {
+    "description": "Abstract 'Azure Sentinel Destination' full stack: new Log Analytics workspace, Microsoft Sentinel enabled, Data Collection Endpoint, custom AbstractEventLogs_CL table, Data Collection Rule, and DCR role assignments for the supplied service principal. Replace principalId with the Abstract app's service principal OBJECT id (empty = skip RBAC). Use with templates/destinations/sentinel-destination.azuredeploy.json."
+  },
+  "parameters": {
+    "createWorkspace": { "value": true },
+    "workspaceName": { "value": "" },
+    "workspaceSku": { "value": "PerGB2018" },
+    "workspaceRetentionDays": { "value": 90 },
+    "enableSentinel": { "value": true },
+    "dataCollectionEndpointName": { "value": "abstract-dce" },
+    "dataCollectionRuleName": { "value": "abstract-dcr" },
+    "customTableName": { "value": "AbstractEventLogs_CL" },
+    "principalId": { "value": "<service-principal-OBJECT-id>" }
+  }
+}

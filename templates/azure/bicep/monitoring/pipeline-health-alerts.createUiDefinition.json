@@ -1,0 +1,241 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/0.1.2-preview/CreateUIDefinition.MultiVm.json#",
+  "handler": "Microsoft.Azure.CreateUIDef",
+  "version": "0.1.2-preview",
+  "parameters": {
+    "basics": [
+      {
+        "name": "whyInfo",
+        "type": "Microsoft.Common.InfoBox",
+        "visible": true,
+        "options": {
+          "icon": "Warning",
+          "text": "Azure Event Hubs publishes NO consumer-lag metric. When the Abstract consumer stalls, incoming messages keep flowing, no error is raised, every health dashboard stays green, and message retention quietly expires the backlog — after which the data is gone permanently. These alerts infer the stall from outgoing traffic collapsing while incoming traffic continues. Without them, that failure is effectively undetectable.",
+          "uri": "https://learn.microsoft.com/azure/event-hubs/monitor-event-hubs-reference"
+        }
+      },
+      {
+        "name": "namespaceName",
+        "type": "Microsoft.Common.TextBox",
+        "label": "Event Hubs namespace to monitor",
+        "toolTip": "Name of the EXISTING namespace. Deploy the Event Hub source template first — this one only adds alerts.",
+        "constraints": {
+          "required": true,
+          "validations": [
+            {
+              "regex": "^[a-zA-Z][a-zA-Z0-9-]{4,48}[a-zA-Z0-9]$",
+              "message": "6-50 characters, must start with a letter and end with a letter or number."
+            }
+          ]
+        },
+        "visible": true
+      },
+      {
+        "name": "alertPrefix",
+        "type": "Microsoft.Common.TextBox",
+        "label": "Alert rule name prefix",
+        "defaultValue": "abstract-eh",
+        "toolTip": "Prefix for every alert rule created here. Pick something recognisable so operators know not to delete them by hand.",
+        "constraints": {
+          "required": true,
+          "validations": [
+            {
+              "regex": "^[a-zA-Z0-9-]{2,20}$",
+              "message": "2-20 characters, letters, numbers and hyphens."
+            }
+          ]
+        },
+        "visible": true
+      },
+      {
+        "name": "actionGroupId",
+        "type": "Microsoft.Common.TextBox",
+        "label": "Action Group resource ID (who gets notified)",
+        "defaultValue": "",
+        "toolTip": "Full resource ID of an existing Action Group. Leave empty to create the rules without notifications — they will appear in Azure Monitor but nobody will be told when they fire.",
+        "constraints": {
+          "required": false,
+          "validations": [
+            {
+              "regex": "^$|^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/[Mm]icrosoft.[Ii]nsights/actionGroups/[^/]+$",
+              "message": "Leave empty, or supply a full Action Group resource ID."
+            }
+          ]
+        },
+        "visible": true
+      },
+      {
+        "name": "noActionGroupWarning",
+        "type": "Microsoft.Common.InfoBox",
+        "visible": "[empty(basics('actionGroupId'))]",
+        "options": {
+          "icon": "Warning",
+          "text": "No Action Group supplied. The alert rules will be created and will evaluate, but NOBODY WILL BE NOTIFIED when they fire. That is rarely what you want for a data-loss alert — supply an Action Group, or plan to attach one afterwards."
+        }
+      },
+      {
+        "name": "createDisabled",
+        "type": "Microsoft.Common.CheckBox",
+        "label": "Create the rules disabled, for review first",
+        "toolTip": "Useful on a noisy estate: deploy, read the thresholds, then enable."
+      }
+    ],
+    "steps": [
+      {
+        "name": "thresholds",
+        "label": "Thresholds",
+        "elements": [
+          {
+            "name": "thresholdInfo",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": true,
+            "options": {
+              "icon": "Info",
+              "text": "Defaults are deliberately conservative — they are meant to catch a real outage without paging anyone over a quiet afternoon. Tune the stall window to comfortably exceed the Abstract consumer's poll interval."
+            }
+          },
+          {
+            "name": "consumerStallWindowMinutes",
+            "type": "Microsoft.Common.Slider",
+            "label": "Consumer stall window (minutes)",
+            "min": 5,
+            "max": 360,
+            "defaultValue": 30,
+            "showStepMarkers": false,
+            "toolTip": "How long outgoing traffic must stay collapsed before the consumer is considered stalled. Too short and a normal quiet period pages someone; too long and you burn retention before anyone knows.",
+            "constraints": {
+              "required": true
+            },
+            "visible": true
+          },
+          {
+            "name": "minIncomingToAlert",
+            "type": "Microsoft.Common.Slider",
+            "label": "Minimum incoming messages before a flat consumer counts as stalled",
+            "min": 1,
+            "max": 10000,
+            "defaultValue": 100,
+            "showStepMarkers": false,
+            "toolTip": "Guards against alerting on a genuinely idle hub, where zero-in and zero-out is correct and healthy.",
+            "constraints": {
+              "required": true
+            },
+            "visible": true
+          },
+          {
+            "name": "ingestionStoppedWindowMinutes",
+            "type": "Microsoft.Common.Slider",
+            "label": "Ingestion stopped window (minutes)",
+            "min": 5,
+            "max": 1440,
+            "defaultValue": 60,
+            "showStepMarkers": false,
+            "toolTip": "Zero incoming messages for this long means the PRODUCER side broke — a deleted diagnostic setting, a revoked Send key, or a firewall change that blocked Azure Monitor's own delivery.",
+            "constraints": {
+              "required": true
+            },
+            "visible": true
+          },
+          {
+            "name": "throttleThreshold",
+            "type": "Microsoft.Common.Slider",
+            "label": "Throttled requests per 5 minutes before alerting",
+            "min": 1,
+            "max": 1000,
+            "defaultValue": 10,
+            "showStepMarkers": false,
+            "toolTip": "Any sustained throttling means throughput units are saturated. Note partitions cap parallelism independently and cannot be increased on Standard.",
+            "constraints": {
+              "required": true
+            },
+            "visible": true
+          },
+          {
+            "name": "dataLossSeverity",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Severity for data-loss alerts",
+            "defaultValue": "1 - Error",
+            "toolTip": "Applies to the consumer-stalled and ingestion-stopped rules. These are the two that lose data permanently, so they warrant a higher severity than the capacity alerts.",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                { "label": "0 - Critical", "value": 0 },
+                { "label": "1 - Error", "value": 1 },
+                { "label": "2 - Warning", "value": 2 },
+                { "label": "3 - Informational", "value": 3 },
+                { "label": "4 - Verbose", "value": 4 }
+              ]
+            },
+            "visible": true
+          },
+          {
+            "name": "capacitySeverity",
+            "type": "Microsoft.Common.DropDown",
+            "label": "Severity for capacity alerts",
+            "defaultValue": "2 - Warning",
+            "toolTip": "Applies to throttling, user errors and quota-exceeded. These degrade the pipeline but do not silently destroy data.",
+            "constraints": {
+              "required": true,
+              "allowedValues": [
+                { "label": "0 - Critical", "value": 0 },
+                { "label": "1 - Error", "value": 1 },
+                { "label": "2 - Warning", "value": 2 },
+                { "label": "3 - Informational", "value": 3 },
+                { "label": "4 - Verbose", "value": 4 }
+              ]
+            },
+            "visible": true
+          },
+          {
+            "name": "tags",
+            "type": "Microsoft.Common.TagsByResource",
+            "resources": [
+              "Microsoft.Insights/metricAlerts",
+              "Microsoft.Insights/scheduledQueryRules"
+            ],
+            "visible": true
+          }
+        ]
+      },
+      {
+        "name": "notCovered",
+        "label": "What this does not cover",
+        "elements": [
+          {
+            "name": "autoInflateGap",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": true,
+            "options": {
+              "icon": "Warning",
+              "text": "The Auto-Inflate COST ratchet is deliberately not alerted on here. Auto-Inflate scales throughput units up and never scales them back down, so one traffic spike sets a permanent new floor on the bill — and because Capture is metered per throughput unit, it inflates that line too. There is no platform metric for the provisioned throughput-unit count; the scale events land in the AutoScaleLogs diagnostic category, which needs a diagnostic setting on the namespace itself sending to a Log Analytics workspace. This template cannot assume that exists. Until it is wired up, review provisioned throughput units by hand each month.",
+              "uri": "https://learn.microsoft.com/azure/event-hubs/event-hubs-auto-inflate"
+            }
+          },
+          {
+            "name": "sparseMetricNote",
+            "type": "Microsoft.Common.InfoBox",
+            "visible": true,
+            "options": {
+              "icon": "Info",
+              "text": "Why the consumer-stall rule is a log search and not a metric alert: Event Hubs metrics are sparse. When nothing is consuming, the platform may emit no outgoing datapoints at all rather than emitting zeros — so a metric alert of the form 'outgoing < threshold' has nothing to evaluate and sits in Insufficient Data forever. The KQL used here synthesises a zero row when the metric is silent, which makes 'no data' and 'zero throughput' the same alertable condition."
+            }
+          }
+        ]
+      }
+    ],
+    "outputs": {
+      "namespaceName": "[basics('namespaceName')]",
+      "location": "[location()]",
+      "alertPrefix": "[basics('alertPrefix')]",
+      "actionGroupId": "[basics('actionGroupId')]",
+      "createDisabled": "[basics('createDisabled')]",
+      "consumerStallWindowMinutes": "[steps('thresholds').consumerStallWindowMinutes]",
+      "minIncomingToAlert": "[steps('thresholds').minIncomingToAlert]",
+      "ingestionStoppedWindowMinutes": "[steps('thresholds').ingestionStoppedWindowMinutes]",
+      "throttleThreshold": "[steps('thresholds').throttleThreshold]",
+      "dataLossSeverity": "[steps('thresholds').dataLossSeverity]",
+      "capacitySeverity": "[steps('thresholds').capacitySeverity]",
+      "tags": "[steps('thresholds').tags]"
+    }
+  }
+}

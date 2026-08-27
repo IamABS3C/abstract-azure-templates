@@ -1,0 +1,24 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "2.0.0.0",
+  "metadata": {
+    "description": "Onboarding profile: guardrails force public access ON so Abstract ingestion cannot break while you validate the pipeline. Connection-string auth only; harden later with ip-allowlist or hybrid."
+  },
+  "parameters": {
+    "namespaceName": { "value": "abs-eh001" },
+    "sku": { "value": "Standard" },
+    "capacity": { "value": 2 },
+    "autoHubNaming": { "value": true },
+    "hubPrefix": { "value": "evh-abstract" },
+    "environment": { "value": "" },
+    "hubSources": { "value": [ "activity", "entra", "defender" ] },
+    "defaultPartitionCount": { "value": 4 },
+    "consumerGroupName": { "value": "abstract" },
+    "enableSas": { "value": true },
+    "sasRights": { "value": [ "Listen" ] },
+    "enableRbac": { "value": false },
+    "createStorageAccount": { "value": true },
+    "blobContainerName": { "value": "abstract-checkpoints" },
+    "safeMode": { "value": true }
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "2.0.0.0",
+  "metadata": {
+    "description": "Hardened public profile: default-Deny firewall on the namespace (and mirrored to the checkpoint storage account) with a CIDR allowlist. REPLACE the placeholder with Abstract's egress CIDRs or ingestion stops."
+  },
+  "parameters": {
+    "namespaceName": { "value": "abs-eh001" },
+    "sku": { "value": "Standard" },
+    "capacity": { "value": 2 },
+    "autoHubNaming": { "value": true },
+    "hubPrefix": { "value": "evh-abstract" },
+    "hubSources": { "value": [ "activity", "entra", "defender" ] },
+    "defaultPartitionCount": { "value": 4 },
+    "consumerGroupName": { "value": "abstract" },
+    "enableSas": { "value": true },
+    "sasRights": { "value": [ "Listen" ] },
+    "enableRbac": { "value": true },
+    "principalId": { "value": "<service-principal-OBJECT-id>" },
+    "createStorageAccount": { "value": true },
+    "blobContainerName": { "value": "abstract-checkpoints" },
+    "storageApplyIpRules": { "value": true },
+    "safeMode": { "value": false },
+    "allowedIpRanges": { "value": [ "<abstract-egress-cidr>" ] },
+    "allowAzureServices": { "value": true }
+  }
+}

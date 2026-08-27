@@ -1,0 +1,30 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "2.0.0.0",
+  "metadata": {
+    "description": "Maximum isolation: private endpoints for namespace AND checkpoint storage, public network access DISABLED. External SaaS (including Abstract) CANNOT connect over the public internet - use only with private connectivity (e.g. an Abstract collector inside the VNet) or for non-Abstract consumers."
+  },
+  "parameters": {
+    "namespaceName": { "value": "abs-eh001" },
+    "sku": { "value": "Standard" },
+    "capacity": { "value": 2 },
+    "autoHubNaming": { "value": true },
+    "hubPrefix": { "value": "evh-abstract" },
+    "hubSources": { "value": [ "activity", "entra", "defender" ] },
+    "defaultPartitionCount": { "value": 4 },
+    "consumerGroupName": { "value": "abstract" },
+    "enableSas": { "value": false },
+    "enableRbac": { "value": true },
+    "principalId": { "value": "<service-principal-OBJECT-id>" },
+    "createStorageAccount": { "value": true },
+    "blobContainerName": { "value": "abstract-checkpoints" },
+    "storageAllowSharedKeyAccess": { "value": false },
+    "safeMode": { "value": false },
+    "disablePublicNetwork": { "value": true },
+    "enablePrivateEndpoint": { "value": true },
+    "createStoragePrivateEndpoint": { "value": true },
+    "subnetId": { "value": "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/virtualNetworks/<vnet>/subnets/<subnet>" },
+    "privateDnsZoneId": { "value": "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/privateDnsZones/privatelink.servicebus.windows.net" },
+    "storageBlobPrivateDnsZoneId": { "value": "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.Network/privateDnsZones/privatelink.blob.core.windows.net" }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "description": "Parameters for the ONE-CLICK Sentinel Destination variant (sentinel-destination-with-app.azuredeploy.json), which ALSO creates the Entra app registration via an Azure deploymentScript and stores the client secret in Key Vault. PREREQUISITE: managedIdentityResourceId must be a user-assigned managed identity that already holds a directory role able to create app registrations (e.g. Application Administrator). The deployer needs Owner (or Contributor + User Access Administrator) on the resource group. For most deployments prefer the standard template + scripts/new-abstract-sentinel-app.{sh,ps1}."
+  },
+  "parameters": {
+    "managedIdentityResourceId": { "value": "/subscriptions/<sub-id>/resourceGroups/<rg>/providers/Microsoft.ManagedIdentity/userAssignedIdentities/<identity-name>" },
+    "appDisplayName": { "value": "Abstract-Sentinel-App" },
+    "secretValidityYears": { "value": 1 },
+    "secretReaderObjectId": { "value": "" },
+    "keyVaultName": { "value": "" },
+    "createWorkspace": { "value": true },
+    "workspaceName": { "value": "" },
+    "workspaceSku": { "value": "PerGB2018" },
+    "workspaceRetentionDays": { "value": 90 },
+    "enableSentinel": { "value": true },
+    "dataCollectionEndpointName": { "value": "abstract-dce" },
+    "dataCollectionRuleName": { "value": "abstract-dcr" },
+    "customTableName": { "value": "AbstractEventLogs_CL" }
+  }
+}

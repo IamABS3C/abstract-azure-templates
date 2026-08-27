@@ -1,0 +1,616 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-08-01/managementGroupDeploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.44.1.10279",
+      "templateHash": "10459463705849690127"
+    }
+  },
+  "parameters": {
+    "assignmentLocation": {
+      "type": "string",
+      "defaultValue": "eastus",
+      "metadata": {
+        "description": "Region for the policy assignment managed identity and the deploymentScript container."
+      }
+    },
+    "namePrefix": {
+      "type": "string",
+      "defaultValue": "abs",
+      "minLength": 2,
+      "maxLength": 6,
+      "metadata": {
+        "description": "Prefix for the policy assignment name. Capped at 6 - management-group policy assignment names are limited to 24 characters."
+      }
+    },
+    "effect": {
+      "type": "string",
+      "defaultValue": "AuditIfNotExists",
+      "allowedValues": [
+        "DeployIfNotExists",
+        "AuditIfNotExists",
+        "Disabled"
+      ],
+      "metadata": {
+        "description": "Policy effect. AuditIfNotExists reports which subscriptions LACK an Abstract app without creating anything - always start here."
+      }
+    },
+    "enforcementMode": {
+      "type": "string",
+      "defaultValue": "DoNotEnforce",
+      "allowedValues": [
+        "Default",
+        "DoNotEnforce"
+      ],
+      "metadata": {
+        "description": "DoNotEnforce creates the assignment without acting. Combined with AuditIfNotExists this is a completely inert dry run."
+      }
+    },
+    "managedIdentityResourceId": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource ID of a user-assigned managed identity that ALREADY holds Microsoft Graph\nApplication.ReadWrite.All and AppRoleAssignment.ReadWrite.All, consented by a\nGlobal Administrator. Policy cannot create or consent this - see scripts/\nDeploy-AbstractAppReg.sh -a Bootstrap for the one-time setup.\n\nThis identity can grant itself any directory permission. Treat it as tier-0.\n"
+      }
+    },
+    "managedIdentityClientId": {
+      "type": "string",
+      "metadata": {
+        "description": "Client ID of that same identity. The script needs it for `az login --identity --username <clientId>`; the resource ID alone is not enough."
+      }
+    },
+    "centralKeyVaultName": {
+      "type": "string",
+      "metadata": {
+        "description": "Name of a CENTRAL Key Vault that receives every generated client secret. Deliberately central: per-subscription vaults would scatter tier-0 secrets across the estate."
+      }
+    },
+    "centralKeyVaultResourceGroup": {
+      "type": "string",
+      "metadata": {
+        "description": "Resource group of the central Key Vault."
+      }
+    },
+    "centralKeyVaultSubscriptionId": {
+      "type": "string",
+      "metadata": {
+        "description": "Subscription ID of the central Key Vault."
+      }
+    },
+    "appNamePattern": {
+      "type": "string",
+      "defaultValue": "Abstract-{sub}",
+      "metadata": {
+        "description": "App display-name pattern. {sub} is replaced with the target subscription ID, giving one app per subscription. Also the idempotency key - the script reuses an app of the same name rather than creating a second one."
+      }
+    },
+    "graphPermissions": {
+      "type": "array",
+      "defaultValue": [
+        "AuditLog.Read.All",
+        "SecurityAlert.Read.All",
+        "SecurityEvents.Read.All",
+        "SecurityIncident.Read.All",
+        "Directory.Read.All",
+        "IdentityRiskEvent.Read.All",
+        "IdentityRiskyUser.Read.All",
+        "IdentityRiskyServicePrincipal.Read.All",
+        "ThreatHunting.Read.All",
+        "User.Read.All",
+        "Group.Read.All",
+        "Device.Read.All"
+      ],
+      "metadata": {
+        "description": "Microsoft Graph APPLICATION permissions granted to each created app.\n\nVERIFIED against the live Graph service principal on 2026-08-03. Note that\n\"Security.Read.All\" is NOT in this list and must never be added - it does not\nexist as an application permission (nor as a delegated scope); the real coverage\nis SecurityEvents.Read.All + SecurityAlert.Read.All + SecurityIncident.Read.All.\n"
+      }
+    },
+    "secretMonths": {
+      "type": "int",
+      "defaultValue": 12,
+      "minValue": 1,
+      "maxValue": 24,
+      "metadata": {
+        "description": "Client-secret lifetime in months."
+      }
+    },
+    "subscriptionRoleDefinitionIds": {
+      "type": "array",
+      "defaultValue": [
+        "acdd72a7-3385-48ef-bd42-f606fba81ae7",
+        "a638d3c7-ab3a-418d-83e6-5f17a39d4fde"
+      ],
+      "metadata": {
+        "description": "Azure RBAC roles granted to each created service principal ON ITS OWN SUBSCRIPTION. Default is Reader plus Azure Event Hubs Data Receiver. This - not the Graph permissions - is what makes the app per-subscription: Graph permissions are inherently tenant-wide."
+      }
+    },
+    "scriptResourceGroup": {
+      "type": "string",
+      "defaultValue": "rg-abstract-appreg",
+      "metadata": {
+        "description": "Resource group created in each target subscription to host the deploymentScript and its storage. Nothing sensitive lands here."
+      }
+    },
+    "azCliVersion": {
+      "type": "string",
+      "defaultValue": "2.60.0",
+      "metadata": {
+        "description": "az CLI version for the deploymentScript container."
+      }
+    },
+    "tagName": {
+      "type": "string",
+      "defaultValue": "abstract-onboard",
+      "metadata": {
+        "description": "Only act on subscriptions carrying this tag. STRONGLY recommended: it is the difference between \"onboard what we chose\" and \"onboard everything the management group ever contains\". Leave tagName empty to act on all in-scope subscriptions."
+      }
+    },
+    "tagValue": {
+      "type": "string",
+      "defaultValue": "true",
+      "metadata": {
+        "description": "Required tag value when tagName is set."
+      }
+    }
+  },
+  "variables": {
+    "$fxv#0": "#!/usr/bin/env bash\n# =============================================================================\n#  Abstract Security - per-subscription Entra app registration\n#  Runs inside a Microsoft.Resources/deploymentScripts AzureCLI container, AS a\n#  user-assigned managed identity that already holds Graph\n#  Application.ReadWrite.All + AppRoleAssignment.ReadWrite.All.\n#\n#  Loaded into BOTH delivery paths by loadTextContent() so there is exactly one\n#  copy of this logic:\n#    templates/policy/abstract-appreg-policy.bicep         (Path A - Azure Policy)\n#    templates/automation/abstract-appreg-automation.bicep (Path B - event-driven)\n#\n#  Environment (set by the template):\n#    TARGET_SUB      subscription this app is being created for\n#    MI_CLIENT_ID    client ID of the managed identity to log in as\n#    KV_NAME         central Key Vault that receives the client secret\n#    APP_NAME        app display name - ALSO the idempotency key\n#    GRAPH_PERMS     space-separated Graph application permission names\n#    SECRET_MONTHS   client-secret lifetime\n#    RBAC_ROLES      space-separated role definition GUIDs for the target sub\n#\n#  DESIGN RULES\n#    * Idempotent. Re-running reuses the app, reuses a still-valid secret, and\n#      skips grants already in place. Safe for a policy that re-evaluates.\n#    * Consent is VERIFIED, never assumed. We read appRoleAssignments back from\n#      Graph and fail loudly on a shortfall - the failure mode we are explicitly\n#      designing against is \"consent looked fine, Abstract gets 403s\".\n#    * The secret NEVER reaches deployment outputs, logs or stdout. Key Vault only.\n# =============================================================================\nset -euo pipefail\n\nGRAPH=\"https://graph.microsoft.com/v1.0\"\nGRAPH_APP_ID=\"00000003-0000-0000-c000-000000000000\"\n\nlog()  { printf '==> %s\\n' \"$*\"; }\nok()   { printf '    + %s\\n' \"$*\"; }\nwarn() { printf '    ! %s\\n' \"$*\"; }\ndie()  { printf '    X %s\\n' \"$*\" >&2; exit 1; }\n\n# --- Sign in as the pre-consented managed identity -------------------------\nlog \"Signing in as managed identity $MI_CLIENT_ID\"\naz login --identity --username \"$MI_CLIENT_ID\" --allow-no-subscriptions -o none\nTENANT_ID=$(az account show --query tenantId -o tsv)\nok \"tenant $TENANT_ID\"\n\n# --- Resolve the Graph service principal and its appRole map ---------------\nlog \"Resolving Microsoft Graph appRoles\"\nGRAPH_SP=$(az rest --method GET \\\n  --url \"${GRAPH}/servicePrincipals(appId='${GRAPH_APP_ID}')?\\$select=id,appRoles\" \\\n  --headers \"Content-Type=application/json\")\nGRAPH_SP_ID=$(echo \"$GRAPH_SP\" | python3 -c 'import json,sys; print(json.load(sys.stdin)[\"id\"])')\n\n# name -> appRoleId, application-type roles only. An unresolved name is a HARD\n# failure: silently skipping it is how a permission gap reaches production.\nROLE_IDS=$(echo \"$GRAPH_SP\" | GRAPH_PERMS=\"$GRAPH_PERMS\" python3 - <<'PY'\nimport json, os, sys\nsp = json.load(sys.stdin)\nroles = {r['value']: r['id'] for r in sp.get('appRoles', [])\n         if 'Application' in r.get('allowedMemberTypes', [])}\nwant = os.environ['GRAPH_PERMS'].split()\nmissing = [w for w in want if w not in roles]\nif missing:\n    sys.stderr.write(\"UNRESOLVED Graph application permission(s): %s\\n\" % ', '.join(missing))\n    sys.stderr.write(\"These do not exist as APPLICATION permissions in this tenant. \"\n                     \"Note 'Security.Read.All' is a common mistake - it exists as neither \"\n                     \"an application nor a delegated permission.\\n\")\n    sys.exit(1)\nprint(' '.join('%s=%s' % (w, roles[w]) for w in want))\nPY\n) || die \"could not resolve every requested Graph permission - nothing was created\"\nok \"resolved $(echo \"$ROLE_IDS\" | wc -w | tr -d ' ') permission(s)\"\n\n# --- App registration (idempotent by display name) ------------------------\nlog \"Ensuring app registration '$APP_NAME'\"\nAPP_ID=$(az ad app list --filter \"displayName eq '${APP_NAME}'\" --query '[0].appId' -o tsv 2>/dev/null || true)\nif [ -z \"$APP_ID\" ] || [ \"$APP_ID\" = \"None\" ]; then\n  APP_ID=$(az ad app create --display-name \"$APP_NAME\" --sign-in-audience AzureADMyOrg --query appId -o tsv)\n  ok \"created app $APP_ID\"\n  sleep 15   # directory replication before the SP create\nelse\n  ok \"reusing existing app $APP_ID\"\nfi\nAPP_OBJ_ID=$(az ad app show --id \"$APP_ID\" --query id -o tsv)\n\n# --- requiredResourceAccess: what the app ASKS for ------------------------\n# Declared for portal visibility and audit. On its own this grants nothing;\n# the appRoleAssignments below are what actually authorise the app.\nlog \"Declaring requiredResourceAccess\"\nRRA=$(echo \"$ROLE_IDS\" | GRAPH_APP_ID=\"$GRAPH_APP_ID\" python3 - <<'PY'\nimport json, os, sys\npairs = sys.stdin.read().split()\naccess = [{\"id\": p.split('=')[1], \"type\": \"Role\"} for p in pairs]\nprint(json.dumps([{\"resourceAppId\": os.environ['GRAPH_APP_ID'], \"resourceAccess\": access}]))\nPY\n)\necho \"$RRA\" > /tmp/rra.json\naz rest --method PATCH --url \"${GRAPH}/applications/${APP_OBJ_ID}\" \\\n  --headers \"Content-Type=application/json\" \\\n  --body \"{\\\"requiredResourceAccess\\\": $(cat /tmp/rra.json)}\" -o none\nok \"declared\"\n\n# --- Service principal ----------------------------------------------------\nlog \"Ensuring service principal\"\nSP_ID=$(az ad sp show --id \"$APP_ID\" --query id -o tsv 2>/dev/null || true)\nif [ -z \"$SP_ID\" ] || [ \"$SP_ID\" = \"None\" ]; then\n  SP_ID=$(az ad sp create --id \"$APP_ID\" --query id -o tsv)\n  ok \"created SP $SP_ID\"\n  sleep 20   # replication before RBAC + consent\nelse\n  ok \"reusing SP $SP_ID\"\nfi\n\n# --- Admin consent, then PROVE it ----------------------------------------\nlog \"Granting admin consent (app-role assignments)\"\nEXISTING=$(az rest --method GET --url \"${GRAPH}/servicePrincipals/${SP_ID}/appRoleAssignments\" \\\n  --headers \"Content-Type=application/json\" 2>/dev/null || echo '{\"value\":[]}')\n\nGRANTED=0; SKIPPED=0; FAILED=0\nfor pair in $ROLE_IDS; do\n  pname=\"${pair%%=*}\"; rid=\"${pair##*=}\"\n  if echo \"$EXISTING\" | grep -q \"$rid\"; then\n    SKIPPED=$((SKIPPED+1)); continue\n  fi\n  if az rest --method POST --url \"${GRAPH}/servicePrincipals/${SP_ID}/appRoleAssignments\" \\\n      --headers \"Content-Type=application/json\" \\\n      --body \"{\\\"principalId\\\":\\\"${SP_ID}\\\",\\\"resourceId\\\":\\\"${GRAPH_SP_ID}\\\",\\\"appRoleId\\\":\\\"${rid}\\\"}\" \\\n      -o none 2>/tmp/consent-err; then\n    GRANTED=$((GRANTED+1))\n  else\n    if grep -qiE 'already exists|Conflict' /tmp/consent-err; then\n      SKIPPED=$((SKIPPED+1))\n    else\n      FAILED=$((FAILED+1)); warn \"$pname: $(tr -d '\\n' < /tmp/consent-err | head -c 300)\"\n    fi\n  fi\ndone\nok \"granted $GRANTED, already present $SKIPPED, failed $FAILED\"\n\n# Independent read-back. This is the check that matters - not our POST results.\nsleep 10\nVERIFIED=$(az rest --method GET --url \"${GRAPH}/servicePrincipals/${SP_ID}/appRoleAssignments\" \\\n  --headers \"Content-Type=application/json\" | ROLE_IDS=\"$ROLE_IDS\" python3 - <<'PY'\nimport json, os, sys\nhave = {a['appRoleId'] for a in json.load(sys.stdin).get('value', [])}\nwant = [p.split('=')[1] for p in os.environ['ROLE_IDS'].split()]\nprint(sum(1 for w in want if w in have))\nPY\n)\nEXPECTED=$(echo \"$ROLE_IDS\" | wc -w | tr -d ' ')\nif [ \"$VERIFIED\" -ne \"$EXPECTED\" ]; then\n  warn \"CONSENT INCOMPLETE: Graph confirms ${VERIFIED}/${EXPECTED} permission(s).\"\n  warn \"Most likely the managed identity lacks AppRoleAssignment.ReadWrite.All admin consent.\"\n  warn \"Abstract will receive 403s for the missing permissions until this is fixed.\"\n  CONSENT_OK=false\nelse\n  ok \"consent VERIFIED against Graph: ${VERIFIED}/${EXPECTED}\"\n  CONSENT_OK=true\nfi\n\n# --- Client secret -> central Key Vault only ------------------------------\n# Only mint a new secret when the vault holds none with >30 days left. Without\n# this, a re-evaluating policy would churn a fresh secret on every pass and break\n# whatever is already authenticating with the old one.\nlog \"Checking for a usable secret in $KV_NAME\"\nSECRET_NAME=\"abstract-${TARGET_SUB}\"\nNEED_SECRET=true\nif EXP=$(az keyvault secret show --vault-name \"$KV_NAME\" --name \"$SECRET_NAME\" --query 'attributes.expires' -o tsv 2>/dev/null); then\n  if [ -n \"$EXP\" ] && [ \"$EXP\" != \"None\" ]; then\n    if python3 -c \"\nimport sys,datetime\nexp=datetime.datetime.fromisoformat('$EXP'.replace('Z','+00:00'))\nnow=datetime.datetime.now(datetime.timezone.utc)\nsys.exit(0 if (exp-now).days > 30 else 1)\"; then\n      NEED_SECRET=false\n      ok \"existing secret is valid for >30 days - not rotating\"\n    fi\n  fi\nfi\n\nif [ \"$NEED_SECRET\" = true ]; then\n  log \"Generating a client secret (${SECRET_MONTHS} month(s))\"\n  END=$(python3 -c \"\nimport datetime\nprint((datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(days=30*int('$SECRET_MONTHS'))).strftime('%Y-%m-%dT%H:%M:%SZ'))\")\n  SECRET=$(az rest --method POST --url \"${GRAPH}/applications/${APP_OBJ_ID}/addPassword\" \\\n    --headers \"Content-Type=application/json\" \\\n    --body \"{\\\"passwordCredential\\\":{\\\"displayName\\\":\\\"Abstract ${TARGET_SUB}\\\",\\\"endDateTime\\\":\\\"${END}\\\"}}\" \\\n    --query secretText -o tsv)\n  [ -z \"$SECRET\" ] && die \"secret generation returned empty\"\n  az keyvault secret set --vault-name \"$KV_NAME\" --name \"$SECRET_NAME\" \\\n    --value \"$SECRET\" --expires \"$END\" -o none\n  unset SECRET\n  ok \"secret stored at ${KV_NAME}/${SECRET_NAME} (never emitted to outputs or logs)\"\nfi\n\n# --- Azure RBAC on the TARGET subscription -------------------------------\n# This is what actually makes the app per-subscription. Graph application\n# permissions are inherently tenant-wide and cannot be scoped to a subscription.\nlog \"Assigning Azure RBAC on subscription $TARGET_SUB\"\nfor role in $RBAC_ROLES; do\n  if az role assignment create --assignee-object-id \"$SP_ID\" \\\n      --assignee-principal-type ServicePrincipal \\\n      --role \"$role\" --scope \"/subscriptions/${TARGET_SUB}\" -o none 2>/tmp/rbac-err; then\n    ok \"granted role $role\"\n  else\n    if grep -qi 'already exists\\|RoleAssignmentExists' /tmp/rbac-err; then\n      ok \"role $role already assigned\"\n    else\n      warn \"role $role FAILED: $(tr -d '\\n' < /tmp/rbac-err | head -c 300)\"\n    fi\n  fi\ndone\n\n# --- Outputs (no secret, by design) --------------------------------------\ncat > \"$AZ_SCRIPTS_OUTPUT_PATH\" <<JSON\n{\n  \"appId\": \"${APP_ID}\",\n  \"appObjectId\": \"${APP_OBJ_ID}\",\n  \"servicePrincipalObjectId\": \"${SP_ID}\",\n  \"tenantId\": \"${TENANT_ID}\",\n  \"subscriptionId\": \"${TARGET_SUB}\",\n  \"keyVaultName\": \"${KV_NAME}\",\n  \"secretName\": \"${SECRET_NAME}\",\n  \"consentVerified\": ${CONSENT_OK},\n  \"permissionsVerified\": \"${VERIFIED}/${EXPECTED}\"\n}\nJSON\n\nif [ \"$CONSENT_OK\" != true ]; then\n  die \"app created but admin consent is incomplete (${VERIFIED}/${EXPECTED}) - failing so the deployment does not report success\"\nfi\nok \"done\"\n",
+    "scriptName": "abstract-appreg",
+    "subscriptionCondition": "[if(empty(parameters('tagName')), createObject('field', 'type', 'equals', 'Microsoft.Resources/subscriptions'), createObject('allOf', createArray(createObject('field', 'type', 'equals', 'Microsoft.Resources/subscriptions'), createObject('field', format('tags[''{0}'']', parameters('tagName')), 'equals', parameters('tagValue')))))]"
+  },
+  "resources": [
+    {
+      "type": "Microsoft.Authorization/policyDefinitions",
+      "apiVersion": "2023-04-01",
+      "name": "[format('{0}-appreg-per-subscription', parameters('namePrefix'))]",
+      "properties": {
+        "displayName": "Abstract Security - create a per-subscription Entra app registration for Graph collection",
+        "description": "Deploys a deploymentScript that creates (or reuses) an Entra app registration + service principal per subscription, requests the Abstract Graph application permissions, grants admin consent, stores the client secret in a central Key Vault, and assigns Azure RBAC on the target subscription. Entra objects are not ARM resources, so Azure Policy reaches them only indirectly, through a pre-consented managed identity - review the security trade-off in the template header before assigning.",
+        "policyType": "Custom",
+        "mode": "All",
+        "metadata": {
+          "category": "Security Center",
+          "version": "1.0.0",
+          "vendor": "Abstract Security",
+          "securityNote": "Requires a user-assigned managed identity holding Graph Application.ReadWrite.All + AppRoleAssignment.ReadWrite.All. That identity can escalate its own directory privileges; treat it as tier-0 and prefer templates/automation/ where an identity team objects."
+        },
+        "parameters": {
+          "effect": {
+            "type": "String",
+            "allowedValues": [
+              "DeployIfNotExists",
+              "AuditIfNotExists",
+              "Disabled"
+            ],
+            "defaultValue": "AuditIfNotExists",
+            "metadata": {
+              "displayName": "Effect",
+              "description": "AuditIfNotExists reports which subscriptions lack an Abstract app without creating anything."
+            }
+          },
+          "managedIdentityResourceId": {
+            "type": "String",
+            "metadata": {
+              "displayName": "Graph-permissioned managed identity (resource ID)",
+              "description": "Must already hold Application.ReadWrite.All and AppRoleAssignment.ReadWrite.All with admin consent.",
+              "strongType": "Microsoft.ManagedIdentity/userAssignedIdentities",
+              "assignPermissions": true
+            }
+          },
+          "managedIdentityClientId": {
+            "type": "String",
+            "metadata": {
+              "displayName": "Managed identity client ID",
+              "description": "Client ID of the same identity, for az login --identity --username."
+            }
+          },
+          "centralKeyVaultName": {
+            "type": "String",
+            "metadata": {
+              "displayName": "Central Key Vault name"
+            }
+          },
+          "centralKeyVaultResourceGroup": {
+            "type": "String",
+            "metadata": {
+              "displayName": "Central Key Vault resource group"
+            }
+          },
+          "centralKeyVaultSubscriptionId": {
+            "type": "String",
+            "metadata": {
+              "displayName": "Central Key Vault subscription ID"
+            }
+          },
+          "appNamePattern": {
+            "type": "String",
+            "defaultValue": "Abstract-{sub}",
+            "metadata": {
+              "displayName": "App display-name pattern",
+              "description": "{sub} is replaced with the subscription ID. Also the idempotency key."
+            }
+          },
+          "graphPermissions": {
+            "type": "Array",
+            "metadata": {
+              "displayName": "Graph application permissions"
+            }
+          },
+          "secretMonths": {
+            "type": "Integer",
+            "defaultValue": 12,
+            "metadata": {
+              "displayName": "Client secret lifetime (months)"
+            }
+          },
+          "subscriptionRoleDefinitionIds": {
+            "type": "Array",
+            "metadata": {
+              "displayName": "Azure RBAC role IDs granted on the target subscription"
+            }
+          },
+          "scriptResourceGroup": {
+            "type": "String",
+            "defaultValue": "rg-abstract-appreg",
+            "metadata": {
+              "displayName": "Resource group for the deploymentScript"
+            }
+          },
+          "azCliVersion": {
+            "type": "String",
+            "defaultValue": "2.60.0",
+            "metadata": {
+              "displayName": "az CLI version"
+            }
+          },
+          "scriptLocation": {
+            "type": "String",
+            "metadata": {
+              "displayName": "Region for the script container",
+              "strongType": "location"
+            }
+          }
+        },
+        "policyRule": {
+          "if": "[variables('subscriptionCondition')]",
+          "then": {
+            "effect": "[[parameters('effect')]",
+            "details": {
+              "type": "Microsoft.Resources/deploymentScripts",
+              "name": "[variables('scriptName')]",
+              "resourceGroupName": "[[parameters('scriptResourceGroup')]",
+              "existenceScope": "ResourceGroup",
+              "evaluationDelay": "AfterProvisioningSuccess",
+              "existenceCondition": {
+                "field": "Microsoft.Resources/deploymentScripts/provisioningState",
+                "equals": "Succeeded"
+              },
+              "roleDefinitionIds": [
+                "[tenantResourceId('Microsoft.Authorization/roleDefinitions', '8e3af657-a8ff-443c-a75c-2fe8c4bcb635')]"
+              ],
+              "deploymentScope": "Subscription",
+              "deployment": {
+                "location": "[parameters('assignmentLocation')]",
+                "properties": {
+                  "mode": "incremental",
+                  "parameters": {
+                    "subscriptionId": {
+                      "value": "[[field('name')]"
+                    },
+                    "managedIdentityResourceId": {
+                      "value": "[[parameters('managedIdentityResourceId')]"
+                    },
+                    "managedIdentityClientId": {
+                      "value": "[[parameters('managedIdentityClientId')]"
+                    },
+                    "centralKeyVaultName": {
+                      "value": "[[parameters('centralKeyVaultName')]"
+                    },
+                    "appNamePattern": {
+                      "value": "[[parameters('appNamePattern')]"
+                    },
+                    "graphPermissions": {
+                      "value": "[[parameters('graphPermissions')]"
+                    },
+                    "secretMonths": {
+                      "value": "[[parameters('secretMonths')]"
+                    },
+                    "subscriptionRoleDefinitionIds": {
+                      "value": "[[parameters('subscriptionRoleDefinitionIds')]"
+                    },
+                    "scriptResourceGroup": {
+                      "value": "[[parameters('scriptResourceGroup')]"
+                    },
+                    "azCliVersion": {
+                      "value": "[[parameters('azCliVersion')]"
+                    },
+                    "scriptLocation": {
+                      "value": "[[parameters('scriptLocation')]"
+                    }
+                  },
+                  "template": {
+                    "$schema": "https://schema.management.azure.com/schemas/2018-05-01/subscriptionDeploymentTemplate.json#",
+                    "contentVersion": "1.0.0.0",
+                    "parameters": {
+                      "subscriptionId": {
+                        "type": "string"
+                      },
+                      "managedIdentityResourceId": {
+                        "type": "string"
+                      },
+                      "managedIdentityClientId": {
+                        "type": "string"
+                      },
+                      "centralKeyVaultName": {
+                        "type": "string"
+                      },
+                      "appNamePattern": {
+                        "type": "string"
+                      },
+                      "graphPermissions": {
+                        "type": "array"
+                      },
+                      "secretMonths": {
+                        "type": "int"
+                      },
+                      "subscriptionRoleDefinitionIds": {
+                        "type": "array"
+                      },
+                      "scriptResourceGroup": {
+                        "type": "string"
+                      },
+                      "azCliVersion": {
+                        "type": "string"
+                      },
+                      "scriptLocation": {
+                        "type": "string"
+                      }
+                    },
+                    "resources": [
+                      {
+                        "type": "Microsoft.Resources/resourceGroups",
+                        "apiVersion": "2021-04-01",
+                        "name": "[[parameters('scriptResourceGroup')]",
+                        "location": "[[parameters('scriptLocation')]"
+                      },
+                      {
+                        "type": "Microsoft.Resources/deployments",
+                        "apiVersion": "2021-04-01",
+                        "name": "[[concat('abstract-appreg-', uniqueString(parameters('subscriptionId')))]",
+                        "resourceGroup": "[[parameters('scriptResourceGroup')]",
+                        "dependsOn": [
+                          "[[resourceId('Microsoft.Resources/resourceGroups', parameters('scriptResourceGroup'))]"
+                        ],
+                        "properties": {
+                          "mode": "Incremental",
+                          "expressionEvaluationOptions": {
+                            "scope": "inner"
+                          },
+                          "parameters": {
+                            "subscriptionId": {
+                              "value": "[[parameters('subscriptionId')]"
+                            },
+                            "managedIdentityResourceId": {
+                              "value": "[[parameters('managedIdentityResourceId')]"
+                            },
+                            "managedIdentityClientId": {
+                              "value": "[[parameters('managedIdentityClientId')]"
+                            },
+                            "centralKeyVaultName": {
+                              "value": "[[parameters('centralKeyVaultName')]"
+                            },
+                            "appNamePattern": {
+                              "value": "[[parameters('appNamePattern')]"
+                            },
+                            "graphPermissions": {
+                              "value": "[[parameters('graphPermissions')]"
+                            },
+                            "secretMonths": {
+                              "value": "[[parameters('secretMonths')]"
+                            },
+                            "subscriptionRoleDefinitionIds": {
+                              "value": "[[parameters('subscriptionRoleDefinitionIds')]"
+                            },
+                            "azCliVersion": {
+                              "value": "[[parameters('azCliVersion')]"
+                            },
+                            "scriptLocation": {
+                              "value": "[[parameters('scriptLocation')]"
+                            }
+                          },
+                          "template": {
+                            "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+                            "contentVersion": "1.0.0.0",
+                            "parameters": {
+                              "subscriptionId": {
+                                "type": "string"
+                              },
+                              "managedIdentityResourceId": {
+                                "type": "string"
+                              },
+                              "managedIdentityClientId": {
+                                "type": "string"
+                              },
+                              "centralKeyVaultName": {
+                                "type": "string"
+                              },
+                              "appNamePattern": {
+                                "type": "string"
+                              },
+                              "graphPermissions": {
+                                "type": "array"
+                              },
+                              "secretMonths": {
+                                "type": "int"
+                              },
+                              "subscriptionRoleDefinitionIds": {
+                                "type": "array"
+                              },
+                              "azCliVersion": {
+                                "type": "string"
+                              },
+                              "scriptLocation": {
+                                "type": "string"
+                              }
+                            },
+                            "resources": [
+                              {
+                                "type": "Microsoft.Resources/deploymentScripts",
+                                "apiVersion": "2023-08-01",
+                                "name": "[variables('scriptName')]",
+                                "location": "[[parameters('scriptLocation')]",
+                                "kind": "AzureCLI",
+                                "identity": {
+                                  "type": "UserAssigned",
+                                  "userAssignedIdentities": "[[json(concat('{\"', parameters('managedIdentityResourceId'), '\":{}}'))]"
+                                },
+                                "properties": {
+                                  "azCliVersion": "[[parameters('azCliVersion')]",
+                                  "retentionInterval": "PT1H",
+                                  "cleanupPreference": "OnSuccess",
+                                  "timeout": "PT45M",
+                                  "environmentVariables": [
+                                    {
+                                      "name": "TARGET_SUB",
+                                      "value": "[[parameters('subscriptionId')]"
+                                    },
+                                    {
+                                      "name": "MI_CLIENT_ID",
+                                      "value": "[[parameters('managedIdentityClientId')]"
+                                    },
+                                    {
+                                      "name": "KV_NAME",
+                                      "value": "[[parameters('centralKeyVaultName')]"
+                                    },
+                                    {
+                                      "name": "APP_NAME",
+                                      "value": "[[replace(parameters('appNamePattern'), '{sub}', parameters('subscriptionId'))]"
+                                    },
+                                    {
+                                      "name": "GRAPH_PERMS",
+                                      "value": "[[join(parameters('graphPermissions'), ' ')]"
+                                    },
+                                    {
+                                      "name": "SECRET_MONTHS",
+                                      "value": "[[string(parameters('secretMonths'))]"
+                                    },
+                                    {
+                                      "name": "RBAC_ROLES",
+                                      "value": "[[join(parameters('subscriptionRoleDefinitionIds'), ' ')]"
+                                    }
+                                  ],
+                                  "scriptContent": "[variables('$fxv#0')]"
+                                }
+                              }
+                            ],
+                            "outputs": {
+                              "appId": {
+                                "type": "string",
+                                "value": "[format('[reference(resourceId(''Microsoft.Resources/deploymentScripts'', ''{0}'')).outputs.appId]', variables('scriptName'))]"
+                              },
+                              "consentVerified": {
+                                "type": "string",
+                                "value": "[format('[string(reference(resourceId(''Microsoft.Resources/deploymentScripts'', ''{0}'')).outputs.consentVerified)]', variables('scriptName'))]"
+                              }
+                            }
+                          }
+                        }
+                      }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Authorization/policyAssignments",
+      "apiVersion": "2024-04-01",
+      "name": "[format('{0}-appreg', parameters('namePrefix'))]",
+      "location": "[parameters('assignmentLocation')]",
+      "identity": {
+        "type": "SystemAssigned"
+      },
+      "properties": {
+        "displayName": "Abstract Security - per-subscription Entra app registration",
+        "description": "[if(empty(parameters('tagName')), 'Applies to EVERY subscription in scope - no tag gate configured.', format('Applies only to subscriptions tagged {0}={1}.', parameters('tagName'), parameters('tagValue')))]",
+        "policyDefinitionId": "[extensionResourceId(managementGroup().id, 'Microsoft.Authorization/policyDefinitions', format('{0}-appreg-per-subscription', parameters('namePrefix')))]",
+        "enforcementMode": "[parameters('enforcementMode')]",
+        "parameters": {
+          "effect": {
+            "value": "[parameters('effect')]"
+          },
+          "managedIdentityResourceId": {
+            "value": "[parameters('managedIdentityResourceId')]"
+          },
+          "managedIdentityClientId": {
+            "value": "[parameters('managedIdentityClientId')]"
+          },
+          "centralKeyVaultName": {
+            "value": "[parameters('centralKeyVaultName')]"
+          },
+          "centralKeyVaultResourceGroup": {
+            "value": "[parameters('centralKeyVaultResourceGroup')]"
+          },
+          "centralKeyVaultSubscriptionId": {
+            "value": "[parameters('centralKeyVaultSubscriptionId')]"
+          },
+          "appNamePattern": {
+            "value": "[parameters('appNamePattern')]"
+          },
+          "graphPermissions": {
+            "value": "[parameters('graphPermissions')]"
+          },
+          "secretMonths": {
+            "value": "[parameters('secretMonths')]"
+          },
+          "subscriptionRoleDefinitionIds": {
+            "value": "[parameters('subscriptionRoleDefinitionIds')]"
+          },
+          "scriptResourceGroup": {
+            "value": "[parameters('scriptResourceGroup')]"
+          },
+          "azCliVersion": {
+            "value": "[parameters('azCliVersion')]"
+          },
+          "scriptLocation": {
+            "value": "[parameters('assignmentLocation')]"
+          }
+        }
+      },
+      "dependsOn": [
+        "[extensionResourceId(managementGroup().id, 'Microsoft.Authorization/policyDefinitions', format('{0}-appreg-per-subscription', parameters('namePrefix')))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "policyDefinitionId": {
+      "type": "string",
+      "value": "[extensionResourceId(managementGroup().id, 'Microsoft.Authorization/policyDefinitions', format('{0}-appreg-per-subscription', parameters('namePrefix')))]"
+    },
+    "assignmentName": {
+      "type": "string",
+      "value": "[format('{0}-appreg', parameters('namePrefix'))]"
+    },
+    "assignmentPrincipalId": {
+      "type": "string",
+      "metadata": {
+        "description": "Grant this principal Owner (or Contributor + User Access Administrator) on the target subscriptions, and Key Vault Secrets Officer on the central vault."
+      },
+      "value": "[reference(extensionResourceId(managementGroup().id, 'Microsoft.Authorization/policyAssignments', format('{0}-appreg', parameters('namePrefix'))), '2024-04-01', 'full').identity.principalId]"
+    },
+    "nextSteps": {
+      "type": "object",
+      "value": {
+        "step1": "Bootstrap the Graph identity if you have not: scripts/Deploy-AbstractAppReg.sh -a Bootstrap. Needs Global Administrator ONCE.",
+        "step2": "[format('Grant the assignment principal above Owner on the target subscriptions and Key Vault Secrets Officer on {0}.', parameters('centralKeyVaultName'))]",
+        "step3": "Leave effect=AuditIfNotExists first and read Policy > Compliance: it lists exactly which subscriptions would be onboarded.",
+        "step4": "Flip to DeployIfNotExists + enforcementMode=Default, then run a remediation task to act on EXISTING subscriptions.",
+        "tagGate": "[if(empty(parameters('tagName')), 'NO TAG GATE - every in-scope subscription is targeted. Strongly consider setting tagName.', format('Gated on {0}={1}. Tag a subscription to opt it in.', parameters('tagName'), parameters('tagValue')))]",
+        "saferAlternative": "templates/automation/abstract-appreg-automation.bicep keeps the privileged identity in ONE place instead of running privileged containers per subscription."
+      }
+    }
+  }
+}

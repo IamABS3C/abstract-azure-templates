@@ -1,0 +1,511 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2021-09-09/uiFormDefinition.schema.json#",
+  "view": {
+    "kind": "Form",
+    "properties": {
+      "title": "Abstract Security - Azure log streams at scale",
+      "steps": [
+        {
+          "name": "basics",
+          "label": "Basics",
+          "description": "![Abstract Security](https://cybersecurity-excellence-awards.com/wp-content/uploads/163661.png)\n\n# ABSTRACT SECURITY\n**The Security Data Pipeline Platform.** Deliver enriched, normalized security events to any destination \u2014 in real time, at scale.\n\n[abstract.security](https://abstract.security) \u00b7 [Documentation](https://docs.abstractsecurity.app/docs/integrations/) \u00b7 [Book a demo](https://abstract.security)\n\n---\n### Azure log streams at scale \u2014 Azure Policy governance pack\nStop configuring diagnostic settings subscription by subscription. Assign this **once at a management group** and every subscription inside it \u2014 the ones you have today and every one created or moved in later \u2014 streams its logs to the Abstract Event Hub automatically, and drifts back into compliance if someone deletes a setting by hand.\n\n**Streams onboarded here**\n\n| Stream | Mechanism |\n|---|---|\n| Azure Activity Log | Custom `DeployIfNotExists` (Microsoft ships no built-in for the Event Hub destination) |\n| Resource logs \u2014 ~140 resource types | Built-in initiative, **one assignment per region** |\n| Azure SQL auditing | Built-in policy \u2014 a separate feature the resource-log initiative does not cover |\n| Defender for Cloud alerts | Built-in continuous export |\n\n\u26a0\ufe0f **The region rule.** Azure Monitor refuses a diagnostic setting whose Event Hub sits in a different region from the monitored resource. You need one Event Hubs namespace **per region** that holds regional resources, and you add one row per region on the *Resource logs* step. Activity Log is not regional \u2014 one hub serves every subscription.\n\n**Not covered here** (they are tenant-level, so no per-subscription policy can reach them): Microsoft Entra ID, Defender XDR and Microsoft 365. Entra ships as a one-command tenant template alongside this pack.\n\n\u2139\ufe0f **After deployment, two follow-up steps are required** and the Outputs tab spells them out: grant the assignment identities **Azure Event Hubs Data Owner** on the namespace, then run a **remediation task** so existing resources are backfilled \u2014 `DeployIfNotExists` only fires on create/update on its own.",
+          "elements": [
+            {
+              "name": "scopeInfo",
+              "type": "Microsoft.Common.InfoBox",
+              "visible": true,
+              "options": {
+                "icon": "Warning",
+                "text": "This is a MANAGEMENT GROUP deployment - that is what makes future subscriptions onboard themselves. You need Owner, or 'Resource Policy Contributor' + 'User Access Administrator', on the target management group. Guaranteed CLI path: ./scripts/Deploy-AbstractLogStreams.sh -a Deploy -m <mg-id> -p parameters/logstreams-policy.parameters.json",
+                "uri": "https://learn.microsoft.com/azure/azure-resource-manager/templates/deploy-to-management-group"
+              }
+            },
+            {
+              "name": "resourceScope",
+              "type": "Microsoft.Common.ResourceScope",
+              "managementGroup": {
+                "label": "Target management group",
+                "toolTip": "Policies are assigned here. Every subscription in this group - today's and every one added later - is in scope."
+              },
+              "location": {
+                "label": "Assignment identity region",
+                "toolTip": "Where the policy assignments' managed identities live. Unrelated to where logs are collected."
+              }
+            },
+            {
+              "name": "namePrefix",
+              "type": "Microsoft.Common.TextBox",
+              "label": "Assignment name prefix",
+              "defaultValue": "abs",
+              "toolTip": "Prefixes every policy assignment created here. Keep it short \u2014 management-group policy assignment names are capped at 24 characters.",
+              "constraints": {
+                "required": true,
+                "regex": "^[a-z0-9]{2,6}$",
+                "validationMessage": "2-6 lowercase letters or digits (management-group policy assignment names are capped at 24 characters)."
+              }
+            },
+            {
+              "name": "assignmentLocation",
+              "type": "Microsoft.Common.DropDown",
+              "label": "Managed identity region",
+              "defaultValue": "East US",
+              "toolTip": "Where the policy assignments' system-assigned managed identities live. This has nothing to do with where logs are collected \u2014 any region you operate in is fine.",
+              "constraints": {
+                "required": true,
+                "allowedValues": [
+                  {
+                    "label": "East US",
+                    "value": "eastus"
+                  },
+                  {
+                    "label": "East US 2",
+                    "value": "eastus2"
+                  },
+                  {
+                    "label": "Central US",
+                    "value": "centralus"
+                  },
+                  {
+                    "label": "West US 2",
+                    "value": "westus2"
+                  },
+                  {
+                    "label": "West US 3",
+                    "value": "westus3"
+                  },
+                  {
+                    "label": "North Europe",
+                    "value": "northeurope"
+                  },
+                  {
+                    "label": "West Europe",
+                    "value": "westeurope"
+                  },
+                  {
+                    "label": "UK South",
+                    "value": "uksouth"
+                  },
+                  {
+                    "label": "Australia East",
+                    "value": "australiaeast"
+                  },
+                  {
+                    "label": "Southeast Asia",
+                    "value": "southeastasia"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "rolloutMode",
+              "type": "Microsoft.Common.OptionsGroup",
+              "label": "Rollout mode",
+              "defaultValue": "Report first (recommended)",
+              "toolTip": "Start in report-only to see exactly how many subscriptions and resources would be onboarded, and what it will cost, before anything is changed. Re-run with Enforce when you are happy.",
+              "constraints": {
+                "required": true,
+                "allowedValues": [
+                  {
+                    "label": "Report first (recommended)",
+                    "value": "audit"
+                  },
+                  {
+                    "label": "Enforce \u2014 deploy the settings",
+                    "value": "deploy"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "rolloutInfo",
+              "type": "Microsoft.Common.InfoBox",
+              "visible": "[equals(basics('rolloutMode'), 'audit')]",
+              "options": {
+                "icon": "Info",
+                "text": "Report-only: assignments are created with effect AuditIfNotExists and enforcement disabled. Nothing is deployed and no data flows. Compliance results appear under Policy > Compliance within ~30 minutes and tell you the exact resource count driving your Event Hub sizing."
+              }
+            }
+          ]
+        },
+        {
+          "name": "activity",
+          "label": "Activity Log",
+          "elements": [
+            {
+              "name": "activityInfo",
+              "type": "Microsoft.Common.InfoBox",
+              "options": {
+                "icon": "Info",
+                "text": "The Azure Activity Log is the control-plane record for a subscription \u2014 who created, changed or deleted what, plus Security, Policy and ServiceHealth events. It is subscription-scope and NOT regional, so a single Event Hub serves every subscription in the management group no matter where its resources live."
+              }
+            },
+            {
+              "name": "enableActivityLog",
+              "type": "Microsoft.Common.CheckBox",
+              "label": "Onboard every subscription's Activity Log",
+              "defaultValue": true,
+              "toolTip": "Assigns a custom DeployIfNotExists policy. Microsoft publishes a built-in for the Log Analytics destination only; the Event Hub equivalent is defined by this template."
+            },
+            {
+              "name": "activityLogAuthorizationRuleId",
+              "type": "Microsoft.Common.TextBox",
+              "label": "Event Hubs authorization rule ID (Activity Log)",
+              "visible": "[steps('activity').enableActivityLog]",
+              "placeholder": "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.EventHub/namespaces/<ns>/authorizationrules/abstract-diagnostics-send",
+              "toolTip": "Namespace-level rule with Send rights. This is the abstractDiagnosticsAuthRuleId output of the Abstract Event Hub source template. Send alone is sufficient because the hub already exists.",
+              "constraints": {
+                "required": "[steps('activity').enableActivityLog]",
+                "regex": "^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.EventHub/namespaces/[^/]+/[Aa]uthorization[Rr]ules/[^/]+$",
+                "validationMessage": "Must be a full namespace-level authorization rule resource ID ending in /authorizationrules/<rule>."
+              }
+            },
+            {
+              "name": "activityLogEventHubName",
+              "type": "Microsoft.Common.TextBox",
+              "label": "Event Hub name (Activity Log)",
+              "defaultValue": "abs-prod-activity",
+              "visible": "[steps('activity').enableActivityLog]",
+              "toolTip": "The hub must already exist \u2014 Azure Policy never creates hubs, and the diagnostic setting will fail silently against a name that is not there.",
+              "constraints": {
+                "required": "[steps('activity').enableActivityLog]",
+                "regex": "^[a-zA-Z0-9]([a-zA-Z0-9._-]{0,254}[a-zA-Z0-9])?$",
+                "validationMessage": "1-256 chars: letters, numbers, periods, hyphens, underscores; starts/ends alphanumeric."
+              }
+            },
+            {
+              "name": "activityLogCategories",
+              "type": "Microsoft.Common.DropDown",
+              "label": "Activity Log categories",
+              "multiselect": true,
+              "selectAll": true,
+              "filter": true,
+              "defaultValue": [
+                "Administrative",
+                "Security",
+                "ServiceHealth",
+                "Alert",
+                "Recommendation",
+                "Policy",
+                "Autoscale",
+                "ResourceHealth"
+              ],
+              "visible": "[steps('activity').enableActivityLog]",
+              "toolTip": "Abstract recommends all eight. Volume is modest and the pipeline filters downstream, so collecting narrowly here only creates blind spots.",
+              "constraints": {
+                "required": true,
+                "allowedValues": [
+                  {
+                    "label": "Administrative \u2014 create/update/delete on any resource",
+                    "value": "Administrative"
+                  },
+                  {
+                    "label": "Security \u2014 Defender for Cloud alerts surfaced in Activity Log",
+                    "value": "Security"
+                  },
+                  {
+                    "label": "ServiceHealth \u2014 Azure-side incidents affecting you",
+                    "value": "ServiceHealth"
+                  },
+                  {
+                    "label": "Alert \u2014 Azure Monitor alert activations",
+                    "value": "Alert"
+                  },
+                  {
+                    "label": "Recommendation \u2014 Advisor recommendations",
+                    "value": "Recommendation"
+                  },
+                  {
+                    "label": "Policy \u2014 Azure Policy effect actions (audit/deny/deploy)",
+                    "value": "Policy"
+                  },
+                  {
+                    "label": "Autoscale \u2014 autoscale engine actions",
+                    "value": "Autoscale"
+                  },
+                  {
+                    "label": "ResourceHealth \u2014 resource health transitions",
+                    "value": "ResourceHealth"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "resourcelogs",
+          "label": "Resource logs",
+          "elements": [
+            {
+              "name": "regionInfo",
+              "type": "Microsoft.Common.InfoBox",
+              "options": {
+                "icon": "Warning",
+                "text": "THE REGION RULE \u2014 Azure Monitor rejects a diagnostic setting whose Event Hub is in a different region from the monitored resource ('Resources should be in the same region'). Add one row below for EVERY region that holds regional resources, each pointing at an Event Hubs namespace in that same region. One assignment is created per row.",
+                "uri": "https://learn.microsoft.com/azure/azure-monitor/essentials/diagnostic-settings#destinations"
+              }
+            },
+            {
+              "name": "enableResourceLogs",
+              "type": "Microsoft.Common.CheckBox",
+              "label": "Onboard resource logs across the estate",
+              "defaultValue": true,
+              "toolTip": "Assigns the Microsoft built-in initiative covering ~140 resource types \u2014 Key Vault, NSG, Front Door, Firewall, AKS, Cosmos DB, SQL Database, App Service Environment, Automation, API Management and more."
+            },
+            {
+              "name": "categoryGroup",
+              "type": "Microsoft.Common.OptionsGroup",
+              "label": "Category group",
+              "defaultValue": "Everything the resource emits (allLogs)",
+              "visible": "[steps('resourcelogs').enableResourceLogs]",
+              "toolTip": "allLogs is the Abstract default: collect broadly at the source and reduce in the pipeline, where filtering is cheap and reversible. Filtering at the source is neither.",
+              "constraints": {
+                "required": true,
+                "allowedValues": [
+                  {
+                    "label": "Everything the resource emits (allLogs)",
+                    "value": "allLogs"
+                  },
+                  {
+                    "label": "Audit subset only (audit)",
+                    "value": "audit"
+                  }
+                ]
+              }
+            },
+            {
+              "name": "regions",
+              "type": "Microsoft.Common.EditableGrid",
+              "ariaLabel": "Regions and their Event Hubs",
+              "label": "Regions \u2014 one row per region that holds resources",
+              "visible": "[steps('resourcelogs').enableResourceLogs]",
+              "constraints": {
+                "width": "Full",
+                "rows": {
+                  "count": {
+                    "min": 1,
+                    "max": 20
+                  }
+                },
+                "columns": [
+                  {
+                    "id": "location",
+                    "header": "Azure region",
+                    "width": "1fr",
+                    "element": {
+                      "type": "Microsoft.Common.TextBox",
+                      "placeholder": "eastus",
+                      "constraints": {
+                        "required": true,
+                        "regex": "^[a-z0-9]{3,40}$",
+                        "validationMessage": "Region short name, e.g. eastus, westeurope, australiaeast."
+                      }
+                    }
+                  },
+                  {
+                    "id": "authorizationRuleId",
+                    "header": "Event Hubs authorization rule ID (same region)",
+                    "width": "3fr",
+                    "element": {
+                      "type": "Microsoft.Common.TextBox",
+                      "placeholder": "/subscriptions/.../namespaces/<ns-in-this-region>/authorizationrules/abstract-diagnostics-send",
+                      "constraints": {
+                        "required": true,
+                        "regex": "^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.EventHub/namespaces/[^/]+/[Aa]uthorization[Rr]ules/[^/]+$",
+                        "validationMessage": "Full namespace-level authorization rule resource ID. The namespace MUST be in the region named in this row."
+                      }
+                    }
+                  },
+                  {
+                    "id": "eventHubName",
+                    "header": "Event Hub name",
+                    "width": "1fr",
+                    "element": {
+                      "type": "Microsoft.Common.TextBox",
+                      "placeholder": "abs-prod-resource",
+                      "constraints": {
+                        "required": true,
+                        "regex": "^[a-zA-Z0-9]([a-zA-Z0-9._-]{0,254}[a-zA-Z0-9])?$",
+                        "validationMessage": "1-256 chars: letters, numbers, periods, hyphens, underscores."
+                      }
+                    }
+                  }
+                ]
+              }
+            },
+            {
+              "name": "diagnosticSettingName",
+              "type": "Microsoft.Common.TextBox",
+              "label": "Diagnostic setting name",
+              "defaultValue": "abstract-logstream",
+              "visible": "[steps('resourcelogs').enableResourceLogs]",
+              "toolTip": "Applied to every setting the policy creates. Pick something recognisable so operators know it is managed and should not be deleted by hand. Remember the ceiling of five diagnostic settings per resource.",
+              "constraints": {
+                "required": true,
+                "regex": "^[a-zA-Z0-9][a-zA-Z0-9._-]{0,258}[a-zA-Z0-9]$",
+                "validationMessage": "2-260 chars, alphanumeric start and end."
+              }
+            }
+          ]
+        },
+        {
+          "name": "additional",
+          "label": "Additional streams",
+          "elements": [
+            {
+              "name": "additionalInfo",
+              "type": "Microsoft.Common.InfoBox",
+              "options": {
+                "icon": "Info",
+                "text": "These two streams are NOT diagnostic settings, so the resource-log initiative above does not reach them. Each has its own Microsoft built-in policy, assigned here so the whole estate is covered by one deployment."
+              }
+            },
+            {
+              "name": "enableSqlAuditing",
+              "type": "Microsoft.Common.CheckBox",
+              "label": "Azure SQL server auditing \u2192 Event Hub",
+              "defaultValue": false,
+              "toolTip": "SQL auditing is a distinct feature from diagnostic settings \u2014 it carries the statement-level data-plane record (who ran what query), which resource logs do not. One assignment per region, using the same rows you entered on the previous step."
+            },
+            {
+              "name": "sqlNote",
+              "type": "Microsoft.Common.InfoBox",
+              "visible": "[steps('additional').enableSqlAuditing]",
+              "options": {
+                "icon": "Info",
+                "text": "Uses the same per-region Event Hubs rows from the Resource logs step. The assignment identity is granted SQL Security Manager and Log Analytics Contributor automatically."
+              }
+            },
+            {
+              "name": "enableDefenderExport",
+              "type": "Microsoft.Common.CheckBox",
+              "label": "Microsoft Defender for Cloud alerts \u2192 Event Hub",
+              "defaultValue": false,
+              "toolTip": "Defender for Cloud uses 'continuous export', another mechanism entirely. Enabling this gives Abstract the cloud-posture and workload-protection alert stream to correlate against raw resource activity."
+            },
+            {
+              "name": "defenderEventHubAuthorizationRuleId",
+              "type": "Microsoft.Common.TextBox",
+              "label": "Event Hubs authorization rule ID (Defender \u2014 HUB level, not namespace)",
+              "visible": "[steps('additional').enableDefenderExport]",
+              "placeholder": "/subscriptions/<sub>/resourceGroups/<rg>/providers/Microsoft.EventHub/namespaces/<ns>/eventhubs/<hub>/authorizationRules/<rule>",
+              "toolTip": "Watch the shape \u2014 unlike every other policy in this pack, the Defender built-in wants a rule scoped to the HUB, not the namespace. Set perHubSasRules=true on the Abstract Event Hub source template to have one created.",
+              "constraints": {
+                "required": "[steps('additional').enableDefenderExport]",
+                "regex": "^/subscriptions/[^/]+/resourceGroups/[^/]+/providers/Microsoft\\.EventHub/namespaces/[^/]+/[Ee]vent[Hh]ubs/[^/]+/[Aa]uthorization[Rr]ules/[^/]+$",
+                "validationMessage": "Must be a HUB-level rule: .../namespaces/<ns>/eventhubs/<hub>/authorizationRules/<rule>."
+              }
+            },
+            {
+              "name": "defenderExportResourceGroup",
+              "type": "Microsoft.Common.TextBox",
+              "label": "Defender export resource group name",
+              "defaultValue": "rg-abstract-defender-export",
+              "visible": "[steps('additional').enableDefenderExport]",
+              "toolTip": "Created in every in-scope subscription to hold the continuous-export resource.",
+              "constraints": {
+                "required": "[steps('additional').enableDefenderExport]",
+                "regex": "^[a-zA-Z0-9._()-]{1,90}$",
+                "validationMessage": "1-90 chars, valid resource group name."
+              }
+            },
+            {
+              "name": "defenderAlertSeverities",
+              "type": "Microsoft.Common.DropDown",
+              "label": "Defender alert severities to export",
+              "multiselect": true,
+              "selectAll": true,
+              "defaultValue": [
+                "High",
+                "Medium",
+                "Low"
+              ],
+              "visible": "[steps('additional').enableDefenderExport]",
+              "toolTip": "Export everything and let the pipeline decide. Severity filtering at the source discards context you cannot get back.",
+              "constraints": {
+                "required": true,
+                "allowedValues": [
+                  {
+                    "label": "High",
+                    "value": "High"
+                  },
+                  {
+                    "label": "Medium",
+                    "value": "Medium"
+                  },
+                  {
+                    "label": "Low",
+                    "value": "Low"
+                  }
+                ]
+              }
+            }
+          ]
+        },
+        {
+          "name": "followup",
+          "label": "After deployment",
+          "elements": [
+            {
+              "name": "grantInfo",
+              "type": "Microsoft.Common.InfoBox",
+              "options": {
+                "icon": "Warning",
+                "text": "STEP 1 \u2014 Grant Event Hub access. Each policy assignment gets a system-assigned managed identity. Because the Event Hubs namespace normally lives outside the management group's assignment scope, this template cannot grant it. The Outputs tab lists every principal ID; give each one 'Azure Event Hubs Data Owner' on the namespace. scripts/Deploy-AbstractLogStreams.sh -Action Grant does it for you."
+              }
+            },
+            {
+              "name": "remediateInfo",
+              "type": "Microsoft.Common.InfoBox",
+              "options": {
+                "icon": "Warning",
+                "text": "STEP 2 \u2014 Backfill existing resources. DeployIfNotExists only fires when a resource is created or updated. Everything you already own stays non-compliant until you run a remediation task \u2014 one per policy in the initiative. scripts/Deploy-AbstractLogStreams.sh -Action Remediate loops through them.",
+                "uri": "https://learn.microsoft.com/azure/governance/policy/how-to/remediate-resources"
+              }
+            },
+            {
+              "name": "futureSubsInfo",
+              "type": "Microsoft.Common.InfoBox",
+              "options": {
+                "icon": "Info",
+                "text": "STEP 3 \u2014 Make FUTURE subscriptions land in scope. A management-group assignment covers subscriptions in that group, including ones added later \u2014 but new subscriptions default to the Tenant Root Group, not yours. Set the tenant's default management group for new subscriptions to the group you assigned here, otherwise new subscriptions silently miss the policy.",
+                "uri": "https://learn.microsoft.com/azure/governance/management-groups/how-to/protect-resource-hierarchy#setting---default-management-group"
+              }
+            },
+            {
+              "name": "tenantStreamsInfo",
+              "type": "Microsoft.Common.InfoBox",
+              "options": {
+                "icon": "Info",
+                "text": "STEP 4 \u2014 Onboard the tenant-level streams. Microsoft Entra ID, Defender XDR and Microsoft 365 are not per-subscription objects, so no Azure Policy can reach them. Entra is one command: az deployment tenant create --template-file templates/tenant/entra-diagnostics.bicep. See the coverage matrix in docs/azure-log-streams.md for Defender XDR and M365."
+              }
+            }
+          ]
+        }
+      ]
+    },
+    "outputs": {
+      "kind": "ManagementGroup",
+      "managementGroupId": "[steps('basics').resourceScope.managementGroup.id]",
+      "location": "[steps('basics').resourceScope.location.name]",
+      "parameters": {
+        "namePrefix": "[steps('basics').namePrefix]",
+        "assignmentLocation": "[steps('basics').resourceScope.location.name]",
+        "effect": "[if(equals(steps('basics').rolloutMode, 'audit'), 'AuditIfNotExists', 'DeployIfNotExists')]",
+        "enforcementMode": "[if(equals(steps('basics').rolloutMode, 'audit'), 'DoNotEnforce', 'Default')]",
+        "enableActivityLog": "[steps('activity').enableActivityLog]",
+        "activityLogAuthorizationRuleId": "[steps('activity').activityLogAuthorizationRuleId]",
+        "activityLogEventHubName": "[steps('activity').activityLogEventHubName]",
+        "activityLogCategories": "[steps('activity').activityLogCategories]",
+        "enableResourceLogs": "[steps('resourcelogs').enableResourceLogs]",
+        "categoryGroup": "[steps('resourcelogs').categoryGroup]",
+        "regions": "[steps('resourcelogs').regions]",
+        "diagnosticSettingName": "[steps('resourcelogs').diagnosticSettingName]",
+        "enableSqlAuditing": "[steps('additional').enableSqlAuditing]",
+        "enableDefenderExport": "[steps('additional').enableDefenderExport]",
+        "defenderEventHubAuthorizationRuleId": "[steps('additional').defenderEventHubAuthorizationRuleId]",
+        "defenderExportResourceGroup": "[steps('additional').defenderExportResourceGroup]",
+        "defenderAlertSeverities": "[steps('additional').defenderAlertSeverities]"
+      }
+    }
+  }
+}

@@ -1,0 +1,339 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "metadata": {
+    "_generator": {
+      "name": "bicep",
+      "version": "0.44.1.10279",
+      "templateHash": "16821445434871458355"
+    }
+  },
+  "parameters": {
+    "location": {
+      "type": "string",
+      "defaultValue": "[resourceGroup().location]",
+      "metadata": {
+        "description": "Azure region for the workspace, DCE and DCR. Keep these consistent (the DCE/DCR must be in the same region as the workspace)."
+      }
+    },
+    "tags": {
+      "type": "object",
+      "defaultValue": {},
+      "metadata": {
+        "description": "Tags applied to every resource created by this template."
+      }
+    },
+    "createWorkspace": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Create a new Log Analytics workspace. Set false to target an EXISTING workspace in THIS resource group (provide its name in workspaceName)."
+      }
+    },
+    "workspaceName": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Workspace name. When creating: leave empty to auto-generate (abstract-sentinel-<hash>). When using an existing workspace: the exact name of that workspace (must live in this resource group)."
+      }
+    },
+    "workspaceSku": {
+      "type": "string",
+      "defaultValue": "PerGB2018",
+      "allowedValues": [
+        "PerGB2018",
+        "CapacityReservation",
+        "Free",
+        "Standalone",
+        "PerNode"
+      ],
+      "metadata": {
+        "description": "Workspace pricing tier. PerGB2018 is the standard pay-as-you-go tier."
+      }
+    },
+    "workspaceRetentionDays": {
+      "type": "int",
+      "defaultValue": 90,
+      "minValue": 7,
+      "maxValue": 730,
+      "metadata": {
+        "description": "Workspace data retention in days (only applied when creating a new workspace)."
+      }
+    },
+    "enableSentinel": {
+      "type": "bool",
+      "defaultValue": true,
+      "metadata": {
+        "description": "Enable Microsoft Sentinel on the workspace (only applied when creating a new workspace; assumed already enabled for existing workspaces)."
+      }
+    },
+    "existingWorkspaceLocation": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Region of the EXISTING workspace (Existing mode only). The DCE and DCR MUST be created in the same region as the target workspace, so if your existing workspace is in a different region than this deployment, set it here (e.g. eastus2). Leave empty to use the deployment location."
+      }
+    },
+    "dataCollectionEndpointName": {
+      "type": "string",
+      "defaultValue": "abstract-dce",
+      "metadata": {
+        "description": "Name of the Data Collection Endpoint (DCE) that receives data from Abstract."
+      }
+    },
+    "dataCollectionRuleName": {
+      "type": "string",
+      "defaultValue": "abstract-dcr",
+      "metadata": {
+        "description": "Name of the Data Collection Rule (DCR) that routes data into the workspace table."
+      }
+    },
+    "customTableName": {
+      "type": "string",
+      "defaultValue": "AbstractEventLogs_CL",
+      "metadata": {
+        "description": "Custom log table name. MUST end in _CL. Enter this (as the stream Custom-<table>) in the \"Log Stream Name\" field of the Abstract destination modal."
+      }
+    },
+    "tableColumns": {
+      "type": "array",
+      "defaultValue": [
+        {
+          "name": "TimeGenerated",
+          "type": "datetime"
+        },
+        {
+          "name": "Message",
+          "type": "string"
+        },
+        {
+          "name": "AbstractEvent",
+          "type": "dynamic"
+        }
+      ],
+      "metadata": {
+        "description": "Schema of the custom table and the DCR stream. The default is a minimal, safe schema - replace it with the columns from Abstract's all_fields.json to capture the full Abstract Common Schema. TimeGenerated (datetime) is REQUIRED by Log Analytics."
+      }
+    },
+    "principalId": {
+      "type": "string",
+      "defaultValue": "",
+      "metadata": {
+        "description": "Object ID of the service principal Abstract authenticates as (the Enterprise Application object ID, NOT the Application/client ID). Leave empty to skip role assignments and grant them yourself later."
+      }
+    },
+    "principalType": {
+      "type": "string",
+      "defaultValue": "ServicePrincipal",
+      "allowedValues": [
+        "ServicePrincipal",
+        "User",
+        "Group"
+      ],
+      "metadata": {
+        "description": "Type of the principal being granted RBAC (avoids PrincipalNotFound on freshly created SPNs)."
+      }
+    }
+  },
+  "variables": {
+    "autoWorkspaceName": "[format('abstract-sentinel-{0}', uniqueString(resourceGroup().id))]",
+    "effectiveWorkspaceName": "[if(parameters('createWorkspace'), if(empty(parameters('workspaceName')), variables('autoWorkspaceName'), parameters('workspaceName')), parameters('workspaceName'))]",
+    "workspaceResourceId": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('effectiveWorkspaceName'))]",
+    "effectiveLocation": "[if(parameters('createWorkspace'), parameters('location'), if(empty(parameters('existingWorkspaceLocation')), parameters('location'), parameters('existingWorkspaceLocation')))]",
+    "streamName": "[format('Custom-{0}', parameters('customTableName'))]",
+    "logAnalyticsDestinationName": "abstractSentinelWorkspace",
+    "monitoringMetricsPublisherRoleId": "3913510d-42f4-4e42-8a64-420c390055eb",
+    "monitoringContributorRoleId": "749f88d5-cbae-40b8-bcfc-e573ddc772fa"
+  },
+  "resources": [
+    {
+      "condition": "[parameters('createWorkspace')]",
+      "type": "Microsoft.OperationalInsights/workspaces",
+      "apiVersion": "2023-09-01",
+      "name": "[variables('effectiveWorkspaceName')]",
+      "location": "[parameters('location')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "sku": {
+          "name": "[parameters('workspaceSku')]"
+        },
+        "retentionInDays": "[parameters('workspaceRetentionDays')]",
+        "features": {
+          "enableLogAccessUsingOnlyResourcePermissions": true
+        }
+      }
+    },
+    {
+      "condition": "[and(parameters('createWorkspace'), parameters('enableSentinel'))]",
+      "type": "Microsoft.SecurityInsights/onboardingStates",
+      "apiVersion": "2024-03-01",
+      "scope": "[resourceId('Microsoft.OperationalInsights/workspaces', variables('effectiveWorkspaceName'))]",
+      "name": "default",
+      "properties": {},
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('effectiveWorkspaceName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/tables",
+      "apiVersion": "2022-10-01",
+      "name": "[format('{0}/{1}', variables('effectiveWorkspaceName'), parameters('customTableName'))]",
+      "properties": {
+        "schema": {
+          "copy": [
+            {
+              "name": "columns",
+              "count": "[length(parameters('tableColumns'))]",
+              "input": {
+                "name": "[parameters('tableColumns')[copyIndex('columns')].name]",
+                "type": "[if(equals(toLower(string(parameters('tableColumns')[copyIndex('columns')].type)), 'datetime'), 'dateTime', toLower(string(parameters('tableColumns')[copyIndex('columns')].type)))]"
+              }
+            }
+          ],
+          "name": "[parameters('customTableName')]"
+        },
+        "totalRetentionInDays": "[parameters('workspaceRetentionDays')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces', variables('effectiveWorkspaceName'))]"
+      ]
+    },
+    {
+      "type": "Microsoft.Insights/dataCollectionEndpoints",
+      "apiVersion": "2023-03-11",
+      "name": "[parameters('dataCollectionEndpointName')]",
+      "location": "[variables('effectiveLocation')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "networkAcls": {
+          "publicNetworkAccess": "Enabled"
+        }
+      }
+    },
+    {
+      "type": "Microsoft.Insights/dataCollectionRules",
+      "apiVersion": "2023-03-11",
+      "name": "[parameters('dataCollectionRuleName')]",
+      "location": "[variables('effectiveLocation')]",
+      "tags": "[parameters('tags')]",
+      "properties": {
+        "dataCollectionEndpointId": "[resourceId('Microsoft.Insights/dataCollectionEndpoints', parameters('dataCollectionEndpointName'))]",
+        "streamDeclarations": {
+          "[format('{0}', variables('streamName'))]": {
+            "copy": [
+              {
+                "name": "columns",
+                "count": "[length(parameters('tableColumns'))]",
+                "input": {
+                  "name": "[parameters('tableColumns')[copyIndex('columns')].name]",
+                  "type": "[toLower(string(parameters('tableColumns')[copyIndex('columns')].type))]"
+                }
+              }
+            ]
+          }
+        },
+        "destinations": {
+          "logAnalytics": [
+            {
+              "workspaceResourceId": "[variables('workspaceResourceId')]",
+              "name": "[variables('logAnalyticsDestinationName')]"
+            }
+          ]
+        },
+        "dataFlows": [
+          {
+            "streams": [
+              "[variables('streamName')]"
+            ],
+            "destinations": [
+              "[variables('logAnalyticsDestinationName')]"
+            ],
+            "transformKql": "source",
+            "outputStream": "[variables('streamName')]"
+          }
+        ]
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.OperationalInsights/workspaces/tables', split(format('{0}/{1}', variables('effectiveWorkspaceName'), parameters('customTableName')), '/')[0], split(format('{0}/{1}', variables('effectiveWorkspaceName'), parameters('customTableName')), '/')[1])]",
+        "[resourceId('Microsoft.Insights/dataCollectionEndpoints', parameters('dataCollectionEndpointName'))]"
+      ]
+    },
+    {
+      "condition": "[not(empty(parameters('principalId')))]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.Insights/dataCollectionRules', parameters('dataCollectionRuleName'))]",
+      "name": "[guid(resourceId('Microsoft.Insights/dataCollectionRules', parameters('dataCollectionRuleName')), parameters('principalId'), variables('monitoringMetricsPublisherRoleId'))]",
+      "properties": {
+        "principalId": "[parameters('principalId')]",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('monitoringMetricsPublisherRoleId'))]",
+        "principalType": "[parameters('principalType')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/dataCollectionRules', parameters('dataCollectionRuleName'))]"
+      ]
+    },
+    {
+      "condition": "[not(empty(parameters('principalId')))]",
+      "type": "Microsoft.Authorization/roleAssignments",
+      "apiVersion": "2022-04-01",
+      "scope": "[resourceId('Microsoft.Insights/dataCollectionRules', parameters('dataCollectionRuleName'))]",
+      "name": "[guid(resourceId('Microsoft.Insights/dataCollectionRules', parameters('dataCollectionRuleName')), parameters('principalId'), variables('monitoringContributorRoleId'))]",
+      "properties": {
+        "principalId": "[parameters('principalId')]",
+        "roleDefinitionId": "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('monitoringContributorRoleId'))]",
+        "principalType": "[parameters('principalType')]"
+      },
+      "dependsOn": [
+        "[resourceId('Microsoft.Insights/dataCollectionRules', parameters('dataCollectionRuleName'))]"
+      ]
+    }
+  ],
+  "outputs": {
+    "workspaceName": {
+      "type": "string",
+      "value": "[variables('effectiveWorkspaceName')]"
+    },
+    "workspaceResourceId": {
+      "type": "string",
+      "value": "[variables('workspaceResourceId')]"
+    },
+    "customTableName": {
+      "type": "string",
+      "value": "[parameters('customTableName')]"
+    },
+    "dataCollectionRuleImmutableId": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Insights/dataCollectionRules', parameters('dataCollectionRuleName')), '2023-03-11').immutableId]"
+    },
+    "dataCollectionEndpointUrl": {
+      "type": "string",
+      "value": "[reference(resourceId('Microsoft.Insights/dataCollectionEndpoints', parameters('dataCollectionEndpointName')), '2023-03-11').logsIngestion.endpoint]"
+    },
+    "logStreamName": {
+      "type": "string",
+      "value": "[variables('streamName')]"
+    },
+    "rbacAssigned": {
+      "type": "bool",
+      "value": "[not(empty(parameters('principalId')))]"
+    },
+    "abstractSentinelOnboarding": {
+      "type": "object",
+      "value": {
+        "azureMonitorDetails": {
+          "dataCollectionRuleId": "[reference(resourceId('Microsoft.Insights/dataCollectionRules', parameters('dataCollectionRuleName')), '2023-03-11').immutableId]",
+          "dataCollectionEndpoint": "[reference(resourceId('Microsoft.Insights/dataCollectionEndpoints', parameters('dataCollectionEndpointName')), '2023-03-11').logsIngestion.endpoint]",
+          "logStreamName": "[variables('streamName')]"
+        },
+        "authentication": {
+          "clientId": "(Entra ID > App registrations > your app > Application (client) ID)",
+          "clientSecretValue": "(Entra ID > App registrations > your app > Certificates & secrets)",
+          "applicationTenantId": "[subscription().tenantId]"
+        },
+        "rbac": "[if(not(empty(parameters('principalId'))), format('Monitoring Metrics Publisher + Monitoring Contributor granted on the DCR to principal {0}', parameters('principalId')), '(no principalId supplied - assign both roles on the DCR yourself)')]",
+        "docs": "https://docs.abstractsecurity.app/docs/integrations/destination-integrations/azure-sentinel-destination/"
+      }
+    }
+  }
+}
