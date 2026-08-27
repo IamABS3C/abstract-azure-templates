@@ -76,19 +76,19 @@ az login
 
 # resource group scope
 az deployment group create -g <rg> \
-  --template-file templates/azure/bicep/source/eventhub-source.bicep
+  --template-file bicep/source/eventhub-source.bicep
 
 # subscription scope
 az deployment sub create -l <region> \
-  --template-file templates/azure/bicep/subscription/activitylog.bicep
+  --template-file bicep/subscription/activitylog.bicep
 
 # management group scope
 az deployment mg create -m <mg-id> -l <region> \
-  --template-file templates/azure/bicep/policy/abstract-logstreams-policy.bicep
+  --template-file bicep/policy/abstract-logstreams-policy.bicep
 
 # tenant scope
 az deployment tenant create -l <region> \
-  --template-file templates/azure/bicep/tenant/entra-diagnostics.bicep
+  --template-file bicep/tenant/entra-diagnostics.bicep
 ```
 
 Preview any of them first by swapping `create` for `what-if`.
@@ -101,7 +101,7 @@ No local tooling, and `az` is already authenticated:
 git clone https://github.com/IamABS3C/abstract-azure-templates
 cd abstract-azure-templates
 az deployment group create -g <rg> \
-  --template-file templates/azure/bicep/source/eventhub-source.bicep
+  --template-file bicep/source/eventhub-source.bicep
 ```
 
 Cloud Shell is the better path when the person deploying has portal access but no local
@@ -124,7 +124,7 @@ A plain Deploy-to-Azure button takes **only** the encoded template URL. There is
 The portal auto-generates the parameter pane from the template's own parameters.
 
 To get the richer guided experience, the template must be published as a **Managed
-Application** or a **template spec** — see `templates/azure/managed-app/`, which contains a
+Application** or a **template spec** — see `managed-app/`, which contains a
 Sentinel Content Hub solution package (`mainTemplate.json`, `createUiDefinition.json`,
 logos) and `PACKAGING.md` describing what Microsoft's own tooling needs to certify it.
 
@@ -149,7 +149,7 @@ The pipeline health alert template above exists specifically to catch this.
 ## Layout
 
 ```text
-templates/azure/
+
   bicep/
     source/         Event Hub namespace and hubs — deploy first
     subscription/   Activity Log export

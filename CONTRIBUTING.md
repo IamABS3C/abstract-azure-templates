@@ -53,7 +53,7 @@ terraform init -backend=false && terraform validate
 tflint --chdir=modules/log-export
 
 # Azure
-az bicep build --file templates/azure/bicep/source/eventhub-source.bicep
+az bicep build --file bicep/source/eventhub-source.bicep
 
 # AWS
 cfn-lint templates/aws/cloudformation/*.yaml
