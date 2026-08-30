@@ -11,3 +11,6 @@ dist/notion-plan.json
 
 # Restricted-name list for the public export gate — never committed.
 export/.public-deny-names
+
+# generated asset payload for the site build
+generators/_assets.json

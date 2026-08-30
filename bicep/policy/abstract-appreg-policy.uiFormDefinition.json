@@ -17,7 +17,7 @@
               "options": {
                 "icon": "Warning",
                 "text": "RECOMMENDED ALTERNATIVE — the event-driven Logic App path is live-tested, keeps the tier-0 identity in one place, and costs nothing per subscription. Only continue here if Azure Policy is a governance requirement.",
-                "uri": "https://github.com/IamABS3C/Abstract-MS-Azure-/blob/main/docs/azure-app-registrations.md"
+                "uri": "https://github.com/IamABS3C/abstract-azure-templates/blob/main/docs/azure-app-registrations.md"
               }
             },
             {
