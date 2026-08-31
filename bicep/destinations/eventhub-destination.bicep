@@ -37,7 +37,7 @@
 @description('Azure region for all resources.')
 param location string = resourceGroup().location
 
-@description('Event Hubs namespace name - globally unique, 6-50 chars, letters/numbers/hyphens, must start with a letter. Becomes <name>.servicebus.windows.net.')
+@description('Event Hubs namespace name - globally unique, 6-50 chars, letters/numbers/hyphens, must start with a letter. Becomes <name>.servicebus.windows.net. You are CREATING this, so it is a name you choose - globally unique across Azure. Check with: az eventhubs namespace list --query [].name -o tsv')
 @minLength(6)
 @maxLength(50)
 param namespaceName string

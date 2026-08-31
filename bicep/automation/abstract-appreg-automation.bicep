@@ -80,7 +80,7 @@ param tags object = {}
 // ---------------------------------------------------------------------------
 // The pre-consented identity
 // ---------------------------------------------------------------------------
-@description('Resource ID of a user-assigned managed identity holding Graph Application.ReadWrite.All + AppRoleAssignment.ReadWrite.All (admin-consented). Create and consent it with scripts/Deploy-AbstractAppReg.sh -a Bootstrap. Treat as tier-0.')
+@description('Resource ID of a user-assigned managed identity holding Graph Application.ReadWrite.All + AppRoleAssignment.ReadWrite.All (admin-consented). Create and consent it with scripts/Deploy-AbstractAppReg.sh -a Bootstrap. Treat as tier-0. Find it with: az identity list --query [].id -o tsv')
 param managedIdentityResourceId string
 
 @description('Client ID of that identity. Unused by the Logic App itself (it authenticates by resource ID) but recorded in outputs so the two paths stay interchangeable.')
@@ -89,7 +89,7 @@ param managedIdentityClientId string = ''
 // ---------------------------------------------------------------------------
 // Secret storage
 // ---------------------------------------------------------------------------
-@description('Central Key Vault that receives every generated client secret. Must already exist; grant the identity Key Vault Secrets Officer on it.')
+@description('Central Key Vault that receives every generated client secret. Must already exist; grant the identity Key Vault Secrets Officer on it. Find it with: az keyvault list --query [].name -o tsv')
 param keyVaultName string
 
 @description('Set false if the Key Vault lives in a different subscription - then supply keyVaultUri instead.')

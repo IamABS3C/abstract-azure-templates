@@ -5,7 +5,7 @@
     "_generator": {
       "name": "bicep",
       "version": "0.44.1.10279",
-      "templateHash": "4945363395078865899"
+      "templateHash": "3509149222666940154"
     }
   },
   "parameters": {
@@ -26,7 +26,7 @@
     "managedIdentityResourceId": {
       "type": "string",
       "metadata": {
-        "description": "Resource ID of a user-assigned managed identity that can create Entra app registrations (holds Application Administrator or equivalent). REQUIRED."
+        "description": "Resource ID of a user-assigned managed identity that can create Entra app registrations (holds Application Administrator or equivalent). REQUIRED. Find it with: az identity list --query [].id -o tsv"
       }
     },
     "appDisplayName": {

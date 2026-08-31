@@ -107,22 +107,24 @@ Global Administrator. Policy cannot create or consent this - see scripts/
 Deploy-AbstractAppReg.sh -a Bootstrap for the one-time setup.
 
 This identity can grant itself any directory permission. Treat it as tier-0.
+
+Find it with: az identity list --query [].id -o tsv
 ''')
 param managedIdentityResourceId string
 
-@description('Client ID of that same identity. The script needs it for `az login --identity --username <clientId>`; the resource ID alone is not enough.')
+@description('Client ID of that same identity. The script needs it for `az login --identity --username <clientId>`; the resource ID alone is not enough. Find it with: az identity list --query [].clientId -o tsv')
 param managedIdentityClientId string
 
 // ---------------------------------------------------------------------------
 // Where secrets land - always central, never in the target subscription
 // ---------------------------------------------------------------------------
-@description('Name of a CENTRAL Key Vault that receives every generated client secret. Deliberately central: per-subscription vaults would scatter tier-0 secrets across the estate.')
+@description('Name of a CENTRAL Key Vault that receives every generated client secret. Deliberately central: per-subscription vaults would scatter tier-0 secrets across the estate. Find it with: az keyvault list --query [].name -o tsv')
 param centralKeyVaultName string
 
-@description('Resource group of the central Key Vault.')
+@description('Resource group of the central Key Vault. Find it with: az group list --query [].name -o tsv')
 param centralKeyVaultResourceGroup string
 
-@description('Subscription ID of the central Key Vault.')
+@description('Subscription ID of the central Key Vault. Find it with: az account list --query [].id -o tsv')
 param centralKeyVaultSubscriptionId string
 
 // ---------------------------------------------------------------------------

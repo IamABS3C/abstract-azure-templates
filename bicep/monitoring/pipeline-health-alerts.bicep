@@ -68,7 +68,7 @@ targetScope = 'resourceGroup'
 // Core
 // ---------------------------------------------------------------------------
 
-@description('Name of the existing Event Hubs namespace to monitor. Must already exist - deploy eventhub-source.bicep first.')
+@description('Name of the existing Event Hubs namespace to monitor. Must already exist - deploy eventhub-source.bicep first. Find it with: az eventhubs namespace list --query [].name -o tsv')
 @minLength(6)
 @maxLength(50)
 param namespaceName string

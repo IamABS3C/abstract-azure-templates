@@ -50,7 +50,7 @@ param tags object = {}
 // ---------------------------------------------------------------------------
 // Identity that runs the app-registration script (PREREQUISITE - see header)
 // ---------------------------------------------------------------------------
-@description('Resource ID of a user-assigned managed identity that can create Entra app registrations (holds Application Administrator or equivalent). REQUIRED.')
+@description('Resource ID of a user-assigned managed identity that can create Entra app registrations (holds Application Administrator or equivalent). REQUIRED. Find it with: az identity list --query [].id -o tsv')
 param managedIdentityResourceId string
 
 @description('Display name for the Entra app registration created for Abstract.')

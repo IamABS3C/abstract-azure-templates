@@ -20,7 +20,7 @@ targetScope = 'subscription'
 @maxLength(260)
 param settingName string = 'abstract-activity-logs'
 
-@description('Full resource ID of an Event Hubs namespace authorization rule with Send rights. Use the abstractDiagnosticsAuthRuleId output of the main template.')
+@description('Full resource ID of an Event Hubs namespace authorization rule with Send rights. Use the abstractDiagnosticsAuthRuleId output of the main template. Find it with: az eventhubs namespace authorization-rule list -g RESOURCE_GROUP --namespace-name NAMESPACE --query [].id -o tsv')
 param eventHubAuthorizationRuleId string
 
 @description('Event Hub that receives the Activity Log stream. main.bicep auto-names hubs <hubPrefix>-<environment>-<source>, so the default source stack creates abs-prod-activity.')
